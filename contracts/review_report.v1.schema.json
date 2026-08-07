@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "Confidence": {
+      "description": "How confident the reviewer is in this finding.",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "DiffMetrics": {
+      "description": "Statistics about the reviewed diff.",
+      "properties": {
+        "files_changed": {
+          "default": 0,
+          "title": "Files Changed",
+          "type": "integer"
+        },
+        "lines_added": {
+          "default": 0,
+          "title": "Lines Added",
+          "type": "integer"
+        },
+        "lines_removed": {
+          "default": 0,
+          "title": "Lines Removed",
+          "type": "integer"
+        }
+      },
+      "title": "DiffMetrics",
+      "type": "object"
+    },
+    "Finding": {
+      "description": "A single code review finding.",
+      "properties": {
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "suggestion": {
+          "title": "Suggestion",
+          "type": "string"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence",
+          "default": "medium"
+        },
+        "source": {
+          "default": "deterministic",
+          "enum": [
+            "deterministic",
+            "llm"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "severity",
+        "message",
+        "suggestion"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Finding severity levels, ordered by impact.",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "info"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "StaticAnalysisResult": {
+      "description": "Result of a single static analysis tool (lint, type-check).",
+      "properties": {
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "status": {
+          "default": "skipped",
+          "enum": [
+            "pass",
+            "fail",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "issues": {
+          "default": 0,
+          "title": "Issues",
+          "type": "integer"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "title": "StaticAnalysisResult",
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "Overall review conclusion.",
+      "enum": [
+        "approve",
+        "request_changes",
+        "block"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "description": "Complete review report posted as a PR comment.",
+  "properties": {
+    "schema_version": {
+      "default": "cr-agent.report.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "static_analysis": {
+      "items": {
+        "$ref": "#/$defs/StaticAnalysisResult"
+      },
+      "title": "Static Analysis",
+      "type": "array"
+    },
+    "metrics": {
+      "$ref": "#/$defs/DiffMetrics"
+    }
+  },
+  "required": [
+    "verdict",
+    "summary"
+  ],
+  "title": "ReviewReport",
+  "type": "object"
+}

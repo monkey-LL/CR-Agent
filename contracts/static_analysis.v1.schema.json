@@ -1,0 +1,41 @@
+{
+  "description": "Result of a single static analysis tool (lint, type-check).",
+  "properties": {
+    "tool": {
+      "title": "Tool",
+      "type": "string"
+    },
+    "status": {
+      "default": "skipped",
+      "enum": [
+        "pass",
+        "fail",
+        "skipped"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "issues": {
+      "default": 0,
+      "title": "Issues",
+      "type": "integer"
+    },
+    "output": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output"
+    }
+  },
+  "required": [
+    "tool"
+  ],
+  "title": "StaticAnalysisResult",
+  "type": "object"
+}

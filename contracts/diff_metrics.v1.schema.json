@@ -1,0 +1,22 @@
+{
+  "description": "Statistics about the reviewed diff.",
+  "properties": {
+    "files_changed": {
+      "default": 0,
+      "title": "Files Changed",
+      "type": "integer"
+    },
+    "lines_added": {
+      "default": 0,
+      "title": "Lines Added",
+      "type": "integer"
+    },
+    "lines_removed": {
+      "default": 0,
+      "title": "Lines Removed",
+      "type": "integer"
+    }
+  },
+  "title": "DiffMetrics",
+  "type": "object"
+}

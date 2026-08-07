@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CR Agent — Code Review</title>
+<style>
+  /* ===== Dark theme (default) ===== */
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-input: #0d1117;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --loading-bg: rgba(13,17,23,0.7);
+    --logo-text: #0d1117;
+  }
+  /* ===== Light theme ===== */
+  [data-theme="light"] {
+    --bg: #f6f8fa;
+    --bg-card: #ffffff;
+    --bg-input: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --green: #1a7f37;
+    --yellow: #9a6700;
+    --red: #cf222e;
+    --purple: #8250df;
+    --loading-bg: rgba(246,248,250,0.8);
+    --logo-text: #ffffff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  /* Header */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-card);
+  }
+  header .logo {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: var(--logo-text);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .badge {
+    background: var(--border);
+    color: var(--text-dim);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  header .spacer { flex: 1; }
+  header .health-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Theme + lang toggles */
+  .toggle-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .toggle-btn:hover { border-color: var(--accent); color: var(--text); }
+
+  /* Layout */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    min-height: calc(100vh - 61px);
+  }
+  @media (max-width: 900px) { .container { grid-template-columns: 1fr; } }
+
+  /* Panels */
+  .panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .panel-body { padding: 16px; flex: 1; overflow-y: auto; }
+
+  /* Input */
+  .input-meta { display: flex; gap: 12px; margin-bottom: 12px; }
+  .input-meta input {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+  .input-meta input:focus { border-color: var(--accent); }
+  .input-meta input::placeholder { color: var(--text-dim); }
+
+  textarea {
+    width: 100%;
+    min-height: 320px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+  }
+  textarea:focus { border-color: var(--accent); }
+
+  .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  .btn {
+    background: var(--accent);
+    color: var(--logo-text);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--text); }
+
+  .toggle-label {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--text-dim); font-size: 12px; cursor: pointer;
+  }
+  .toggle-label input { accent-color: var(--accent); }
+
+  .sample-link {
+    color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: none;
+  }
+  .sample-link:hover { text-decoration: underline; }
+
+  /* Result */
+  .result-empty {
+    color: var(--text-dim); text-align: center; padding: 60px 20px; font-size: 13px;
+  }
+  .result-empty .icon { font-size: 48px; opacity: 0.3; margin-bottom: 12px; }
+
+  .verdict-banner {
+    padding: 12px 16px; border-radius: 6px; margin-bottom: 16px;
+    font-weight: 600; font-size: 15px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .verdict-approve { background: rgba(63,185,80,0.1); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .verdict-request_changes { background: rgba(210,153,34,0.1); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+  .verdict-block { background: rgba(248,81,73,0.1); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  [data-theme="light"] .verdict-approve { background: rgba(26,127,55,0.08); }
+  [data-theme="light"] .verdict-request_changes { background: rgba(154,103,0,0.08); }
+  [data-theme="light"] .verdict-block { background: rgba(207,34,46,0.08); }
+
+  .summary {
+    color: var(--text-dim); font-size: 13px; margin-bottom: 16px;
+    padding: 12px; background: var(--bg-input);
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+
+  .finding {
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px 16px; margin-bottom: 8px;
+    border-left: 3px solid var(--border);
+  }
+  .finding-sev-blocker { border-left-color: var(--red); }
+  .finding-sev-major { border-left-color: var(--yellow); }
+  .finding-sev-minor { border-left-color: var(--accent); }
+  .finding-sev-info { border-left-color: var(--text-dim); }
+
+  .finding-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .sev-tag {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 10px; font-weight: 700; padding: 2px 6px;
+    border-radius: 4px; text-transform: uppercase;
+  }
+  .sev-tag-blocker { background: rgba(248,81,73,0.15); color: var(--red); }
+  .sev-tag-major { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .sev-tag-minor { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .sev-tag-info { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  [data-theme="light"] .sev-tag-blocker { background: rgba(207,34,46,0.1); }
+  [data-theme="light"] .sev-tag-major { background: rgba(154,103,0,0.1); }
+  [data-theme="light"] .sev-tag-minor { background: rgba(9,105,218,0.1); }
+  [data-theme="light"] .sev-tag-info { background: rgba(101,109,118,0.1); }
+
+  .finding-file { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; color: var(--text-dim); }
+  .finding-issue { font-size: 13px; margin-bottom: 4px; }
+  .finding-suggestion { font-size: 12px; color: var(--text-dim); }
+  .finding-suggestion strong { color: var(--green); }
+
+  .metrics {
+    display: flex; gap: 16px; margin-top: 16px; padding: 12px;
+    background: var(--bg-input); border-radius: 6px; border: 1px solid var(--border);
+  }
+  .metric { text-align: center; }
+  .metric-value { font-size: 20px; font-weight: 700; font-family: 'SF Mono', Consolas, monospace; }
+  .metric-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .loading-overlay {
+    position: absolute; inset: 0; background: var(--loading-bg);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; z-index: 10;
+  }
+  .loading-overlay.show { display: flex; }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .rules-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+  .rule-chip {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim);
+  }
+
+  .section-label {
+    margin-bottom: 8px; font-size: 12px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  /* Metrics panel */
+  .metrics-panel {
+    margin-top: 16px; padding: 12px;
+    background: var(--bg-input); border-radius: 6px; border: 1px solid var(--border);
+  }
+  .metrics-panel-title {
+    font-size: 12px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 10px;
+  }
+  .metrics-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+    gap: 8px; margin-bottom: 10px;
+  }
+  .metric-card {
+    text-align: center; padding: 8px 4px;
+    background: var(--bg-card); border-radius: 4px; border: 1px solid var(--border);
+  }
+  .metric-card .v { font-size: 18px; font-weight: 700; font-family: 'SF Mono', Consolas, monospace; }
+  .metric-card .l { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.3px; margin-top: 2px; }
+
+  .phase-timeline {
+    display: flex; gap: 2px; height: 20px; border-radius: 4px; overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .phase-bar {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: #fff; overflow: hidden; white-space: nowrap;
+    transition: flex-grow 0.3s;
+  }
+  .phase-bar:hover { filter: brightness(1.2); }
+
+  .phase-legend {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    font-size: 10px; color: var(--text-dim);
+  }
+  .phase-legend span { display: flex; align-items: center; gap: 3px; }
+  .phase-legend .dot { width: 8px; height: 8px; border-radius: 2px; }
+
+  .token-breakdown {
+    margin-top: 8px; font-size: 11px; color: var(--text-dim);
+  }
+  .token-breakdown table { width: 100%; border-collapse: collapse; }
+  .token-breakdown th, .token-breakdown td {
+    padding: 3px 6px; text-align: right; border-bottom: 1px solid var(--border);
+    font-family: 'SF Mono', Consolas, monospace; font-size: 10px;
+  }
+  .token-breakdown th { color: var(--text); font-weight: 600; text-align: right; }
+  .token-breakdown td:first-child, .token-breakdown th:first-child { text-align: left; }
+  .token-total {
+    padding: 4px 6px; font-weight: 700; color: var(--accent);
+    border-top: 2px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">CR</div>
+  <h1>CR Agent</h1>
+  <span class="badge">Code Review</span>
+  <div class="spacer"></div>
+  <button class="toggle-btn" onclick="toggleLang()" id="langBtn">中文</button>
+  <button class="toggle-btn" onclick="toggleTheme()" id="themeBtn">&#127769;</button>
+  <div class="health-dot" id="healthDot"></div>
+  <span style="font-size:12px;color:var(--text-dim)" id="healthText">online</span>
+</header>
+
+<div class="container">
+  <!-- Left: Input -->
+  <div class="panel" style="position:relative">
+    <div class="panel-header">
+      <span data-i18n="inputTitle">Input — Diff / Patch</span>
+      <div class="spacer" style="flex:1"></div>
+      <a class="sample-link" onclick="loadSample()" data-i18n="loadSample">Load Sample</a>
+    </div>
+    <div class="panel-body">
+      <div class="input-meta">
+        <input type="text" id="prTitle" data-i18n-ph="prTitlePh" placeholder="PR title (optional)" value="Add login endpoint">
+        <input type="text" id="prAuthor" data-i18n-ph="prAuthorPh" placeholder="Author (optional)" value="developer">
+      </div>
+      <textarea id="diffInput"></textarea>
+
+      <div class="actions">
+        <button class="btn" id="reviewBtn" onclick="runReview()" data-i18n="review">Review</button>
+        <button class="btn-secondary" onclick="clearAll()" data-i18n="clear">Clear</button>
+        <div class="spacer" style="flex:1"></div>
+        <label class="toggle-label">
+          <input type="checkbox" id="useLlm">
+          <span data-i18n="useLlm">Use LLM (needs API key)</span>
+        </label>
+      </div>
+
+      <div class="rules-bar" id="rulesBar"></div>
+    </div>
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <div style="color:var(--text-dim);font-size:13px" id="loadingText"></div>
+    </div>
+  </div>
+
+  <!-- Right: Result -->
+  <div class="panel">
+    <div class="panel-header">
+      <span data-i18n="reportTitle">Review Report</span>
+      <div class="spacer" style="flex:1"></div>
+      <span id="elapsedTag" style="font-size:11px;font-family:'SF Mono',Consolas,monospace;color:var(--text-dim)"></span>
+    </div>
+    <div class="panel-body" id="resultBody">
+      <div class="result-empty">
+        <div class="icon">&#128269;</div>
+        <div data-i18n="emptyHint">Run a review to see results here</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== i18n dictionary =====
+const I18N = {
+  en: {
+    inputTitle: 'Input — Diff / Patch',
+    loadSample: 'Load Sample',
+    prTitlePh: 'PR title (optional)',
+    prAuthorPh: 'Author (optional)',
+    review: 'Review',
+    clear: 'Clear',
+    useLlm: 'Use LLM (needs API key)',
+    reportTitle: 'Review Report',
+    emptyHint: 'Run a review to see results here',
+    loadingDet: 'Running deterministic checks...',
+    loadingLlm: 'LLM reviewing (may take 10-30s)...',
+    pasteFirst: 'Please paste a diff first',
+    findings: 'Findings',
+    noIssues: 'No issues found',
+    fix: 'Fix',
+    files: 'Files',
+    added: 'Added',
+    removed: 'Removed',
+    findingsLabel: 'Findings',
+    perfMetrics: 'Performance Metrics',
+    llmCalls: 'LLM Calls',
+    toolCalls: 'Tool Calls',
+    iterations: 'Iterations',
+    totalTokens: 'Total Tokens',
+    promptTokens: 'Prompt',
+    completionTokens: 'Completion',
+    costEst: 'Est. Cost',
+    phaseTimeline: 'Phase Timeline',
+    noMetrics: 'Metrics available only with LLM mode',
+    textareaPh: 'Paste a unified diff here...\n\nExample:\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1,3 +1,5 @@\n def handler(req):\n+    token = "sk-secret-key-1234567890"\n+    cursor.execute(f"SELECT * FROM users WHERE id = {req.id}")\n     return ok()',
+  },
+  zh: {
+    inputTitle: '输入 — Diff / 补丁',
+    loadSample: '加载示例',
+    prTitlePh: 'PR 标题（可选）',
+    prAuthorPh: '作者（可选）',
+    review: '审查',
+    clear: '清空',
+    useLlm: '使用 LLM（需要 API key）',
+    reportTitle: '审查报告',
+    emptyHint: '运行审查后在此查看结果',
+    loadingDet: '正在执行确定性检查...',
+    loadingLlm: 'LLM 审查中（可能需要 10-30 秒）...',
+    pasteFirst: '请先粘贴 diff 内容',
+    findings: '发现的问题',
+    noIssues: '未发现问题',
+    fix: '修复建议',
+    files: '文件',
+    added: '新增',
+    removed: '删除',
+    findingsLabel: '问题数',
+    perfMetrics: '性能指标',
+    llmCalls: 'LLM 调用',
+    toolCalls: '工具调用',
+    iterations: '迭代次数',
+    totalTokens: '总 Token',
+    promptTokens: '输入',
+    completionTokens: '输出',
+    costEst: '预估费用',
+    phaseTimeline: '阶段时间线',
+    noMetrics: '仅 LLM 模式下显示指标',
+    textareaPh: '在此粘贴 unified diff...\n\n示例:\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1,3 +1,5 @@\n def handler(req):\n+    token = "sk-secret-key-1234567890"\n+    cursor.execute(f"SELECT * FROM users WHERE id = {req.id}")\n     return ok()',
+  }
+};
+
+let currentLang = 'en';
+
+function t(key) { return I18N[currentLang][key] || key; }
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  document.getElementById('diffInput').placeholder = t('textareaPh');
+  document.getElementById('langBtn').textContent = currentLang === 'en' ? '中文' : 'EN';
+  // Re-render result if exists
+  if (lastResultData) renderResult(lastResultData);
+}
+
+function toggleLang() {
+  currentLang = currentLang === 'en' ? 'zh' : 'en';
+  applyI18n();
+}
+
+// ===== Theme toggle =====
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'light' ? 'dark' : 'light';
+  if (next === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeBtn').innerHTML = '&#9728;';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    document.getElementById('themeBtn').innerHTML = '&#127769;';
+  }
+}
+
+// ===== Data =====
+const SAMPLE_DIFF = `--- a/src/auth/login.py
++++ b/src/auth/login.py
+@@ -30,7 +30,12 @@ def login(email):
+     import os
+     password = os.environ.get("DB_PASS")
+-    query = "SELECT * FROM users"
++    cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
++    api_key = "hardcoded-secret-value-here"
++    print("debug: login called")
++    breakpoint()
+     return cursor.fetchone()
+
+@@ -80,3 +85,5 @@ def logout():
+     session.clear()
++    # TODO: implement proper session cleanup
+     return redirect("/login")
+`;
+
+let lastResultData = null;
+
+const SEV_ICONS = {
+  blocker: '&#128308;',
+  major: '&#128992;',
+  minor: '&#128309;',
+  info: '&#9898;',
+};
+
+// ===== API =====
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    document.getElementById('healthText').textContent = `v${d.version}`;
+  } catch(e) {
+    document.getElementById('healthDot').style.background = 'var(--red)';
+    document.getElementById('healthText').textContent = 'offline';
+  }
+}
+
+async function loadRules() {
+  try {
+    const r = await fetch('/api/rules');
+    const rules = await r.json();
+    const bar = document.getElementById('rulesBar');
+    bar.innerHTML = rules.map(r =>
+      `<span class="rule-chip" title="${r.message}">${r.rule_id}</span>`
+    ).join('');
+  } catch(e) {}
+}
+
+// ===== Actions =====
+function loadSample() {
+  document.getElementById('diffInput').value = SAMPLE_DIFF;
+  document.getElementById('prTitle').value = 'Add login endpoint';
+}
+
+function clearAll() {
+  document.getElementById('diffInput').value = '';
+  lastResultData = null;
+  document.getElementById('resultBody').innerHTML = `
+    <div class="result-empty">
+      <div class="icon">&#128269;</div>
+      <div>${t('emptyHint')}</div>
+    </div>`;
+  document.getElementById('elapsedTag').textContent = '';
+}
+
+async function runReview() {
+  const diff = document.getElementById('diffInput').value.trim();
+  if (!diff) { alert(t('pasteFirst')); return; }
+
+  const useLlm = document.getElementById('useLlm').checked;
+  const btn = document.getElementById('reviewBtn');
+  btn.disabled = true;
+  document.getElementById('loadingOverlay').classList.add('show');
+  document.getElementById('loadingText').textContent = useLlm ? t('loadingLlm') : t('loadingDet');
+
+  try {
+    const resp = await fetch('/api/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        diff: diff,
+        pr_title: document.getElementById('prTitle').value || 'Untitled',
+        pr_author: document.getElementById('prAuthor').value || 'unknown',
+        use_llm: useLlm,
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">${data.error}</div></div>`;
+      return;
+    }
+
+    lastResultData = data;
+    renderResult(data);
+  } catch(e) {
+    document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">Error: ${e.message}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+function renderResult(data) {
+  const body = document.getElementById('resultBody');
+  document.getElementById('elapsedTag').textContent = `${data.elapsed_seconds}s`;
+
+  let html = '';
+
+  // Verdict
+  const verdictClass = `verdict-${data.verdict}`;
+  const verdictIcon = { approve: '&#9989;', request_changes: '&#9999;', block: '&#9940;' }[data.verdict] || '';
+  html += `<div class="verdict-banner ${verdictClass}">${verdictIcon} ${data.verdict.toUpperCase()}</div>`;
+
+  // Summary
+  html += `<div class="summary">${data.summary}</div>`;
+
+  // Findings
+  if (data.findings && data.findings.length > 0) {
+    html += `<div class="section-label">${t('findings')}</div>`;
+    for (const f of data.findings) {
+      const sev = f.severity;
+      html += `
+        <div class="finding finding-sev-${sev}">
+          <div class="finding-header">
+            <span class="sev-tag sev-tag-${sev}">${sev}</span>
+            <span class="finding-file">${f.file || 'unknown'}:${f.line || '?'}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--text-dim);font-family:'SF Mono',Consolas,monospace">${f.source}</span>
+          </div>
+          <div class="finding-issue">${f.message}</div>
+          <div class="finding-suggestion"><strong>${t('fix')}:</strong> ${f.suggestion}</div>
+        </div>`;
+    }
+  } else {
+    html += `<div style="padding:20px;text-align:center;color:var(--green)">&#9989; ${t('noIssues')}</div>`;
+  }
+
+  // Metrics
+  const m = data.metrics || {};
+  html += `
+    <div class="metrics">
+      <div class="metric"><div class="metric-value" style="color:var(--accent)">${m.files_changed || 0}</div><div class="metric-label">${t('files')}</div></div>
+      <div class="metric"><div class="metric-value" style="color:var(--green)">+${m.lines_added || 0}</div><div class="metric-label">${t('added')}</div></div>
+      <div class="metric"><div class="metric-value" style="color:var(--red)">-${m.lines_removed || 0}</div><div class="metric-label">${t('removed')}</div></div>
+      <div class="metric"><div class="metric-value" style="color:var(--yellow)">${(data.findings||[]).length}</div><div class="metric-label">${t('findingsLabel')}</div></div>
+    </div>`;
+
+  // Performance & Token Metrics
+  if (data.review_metrics) {
+    html += renderMetricsPanel(data.review_metrics);
+  }
+
+  body.innerHTML = html;
+}
+
+function renderMetricsPanel(rm) {
+  const PHASE_COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#39c5cf','#ff7b72','#7ee787'];
+  const tokens = rm.tokens || {};
+  const phases = rm.phases || [];
+
+  // Phase timeline bar
+  const totalMs = phases.reduce((s, p) => s + p.elapsed_ms, 0) || 1;
+  let timelineHtml = '';
+  let legendHtml = '';
+  phases.forEach((p, i) => {
+    const pct = (p.elapsed_ms / totalMs * 100);
+    const color = PHASE_COLORS[i % PHASE_COLORS.length];
+    if (pct > 3) {
+      timelineHtml += `<div class="phase-bar" style="flex-grow:${pct};background:${color}" title="${p.name}: ${p.elapsed_ms.toFixed(1)}ms">${p.name.split('_')[0]}</div>`;
+    } else {
+      timelineHtml += `<div class="phase-bar" style="flex-grow:${pct};background:${color}" title="${p.name}: ${p.elapsed_ms.toFixed(1)}ms"></div>`;
+    }
+    legendHtml += `<span><span class="dot" style="background:${color}"></span>${p.name} (${p.elapsed_ms.toFixed(0)}ms)</span>`;
+  });
+
+  // Token table
+  const perCall = tokens.per_call || [];
+  let tokenTableHtml = '';
+  if (perCall.length > 0) {
+    tokenTableHtml = `
+      <table>
+        <tr><th>#</th><th>${t('promptTokens')}</th><th>${t('completionTokens')}</th><th>Total</th></tr>
+        ${perCall.map(c => `<tr><td>${c.call_index}</td><td>${c.prompt_tokens}</td><td>${c.completion_tokens}</td><td>${c.total_tokens}</td></tr>`).join('')}
+        <tr class="token-total"><td>Total</td><td>${tokens.total_prompt || 0}</td><td>${tokens.total_completion || 0}</td><td>${tokens.total_tokens || 0}</td></tr>
+      </table>`;
+  }
+
+  return `
+    <div class="metrics-panel">
+      <div class="metrics-panel-title">${t('perfMetrics')}</div>
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="v" style="color:var(--accent)">${rm.llm_call_count}</div><div class="l">${t('llmCalls')}</div></div>
+        <div class="metric-card"><div class="v" style="color:var(--purple)">${rm.tool_call_count}</div><div class="l">${t('toolCalls')}</div></div>
+        <div class="metric-card"><div class="v" style="color:var(--yellow)">${rm.iteration_count}</div><div class="l">${t('iterations')}</div></div>
+        <div class="metric-card"><div class="v" style="color:var(--green)">${(tokens.total_tokens || 0).toLocaleString()}</div><div class="l">${t('totalTokens')}</div></div>
+        ${tokens.estimated_cost_usd ? `<div class="metric-card"><div class="v" style="color:var(--red)">$${tokens.estimated_cost_usd}</div><div class="l">${t('costEst')}</div></div>` : ''}
+      </div>
+      ${phases.length > 0 ? `
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${t('phaseTimeline')} (${rm.total_elapsed_ms.toFixed(0)}ms total)</div>
+        <div class="phase-timeline">${timelineHtml}</div>
+        <div class="phase-legend">${legendHtml}</div>
+      ` : ''}
+      ${tokenTableHtml ? `<div class="token-breakdown">${tokenTableHtml}</div>` : ''}
+    </div>`;
+}
+
+// ===== Init =====
+checkHealth();
+loadRules();
+applyI18n();
+</script>
+
+</body>
+</html>
