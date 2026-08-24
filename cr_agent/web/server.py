@@ -105,13 +105,17 @@ async def review(req: ReviewRequest):
             result = graph.invoke({"diff": req.diff, "pr_info": pr_info, "memory_context": ""})
             report = ReviewReport(**result["report"])
             review_metrics = get_metrics()
+            degraded = False
         except Exception as e:
             logger.error("LLM review failed, falling back to deterministic", error=str(e))
             report = _deterministic_only(req.diff, pr_info)
+            report.summary += " ⚠️ LLM 审查失败，已降级为纯确定性规则检查，可能遗漏语义级问题。"
             review_metrics = None
+            degraded = True
     else:
         report = _deterministic_only(req.diff, pr_info)
         review_metrics = None
+        degraded = False
 
     elapsed = time.time() - start
     logger.info("review.complete", use_llm=req.use_llm, findings=len(report.findings), elapsed=round(elapsed, 2))
@@ -124,6 +128,7 @@ async def review(req: ReviewRequest):
         "markdown": report.to_markdown(),
         "elapsed_seconds": round(elapsed, 2),
         "review_metrics": review_metrics.to_dict() if review_metrics else None,
+        "degraded": degraded,
     }
 
 

@@ -74,7 +74,6 @@ def _prepare_review(state: AgentState) -> dict:
     return {
         "messages": [system_msg, user_msg],
         "deterministic_findings": det_findings,
-        "file_contents": {},
         "report": None,
         "iteration": 0,
     }
@@ -82,6 +81,9 @@ def _prepare_review(state: AgentState) -> dict:
 
 def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
     """创建 LLM 决策节点，集成中间件。"""
+    from cr_agent.observability.logger import CircuitBreaker, CircuitBreakerOpenError, retry_with_backoff
+
+    circuit_breaker = CircuitBreaker(threshold=5, recovery_timeout=60.0)
 
     def _llm_decide(state: AgentState) -> dict:
         iteration = state.get("iteration", 0)
@@ -99,9 +101,31 @@ def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
         state_dict["messages"] = list(state.get("messages", []))
         state_dict = chain.run_before_model(state_dict)
 
-        # 调用 LLM
+        # 调用 LLM（带熔断器 + 重试）
         llm_with_tools = llm.bind_tools(ALL_TOOLS)
-        response = llm_with_tools.invoke(state_dict["messages"])
+
+        @retry_with_backoff(max_retries=3, base_delay=1.0)
+        def _call_llm():
+            return circuit_breaker.call(llm_with_tools.invoke, state_dict["messages"])
+
+        try:
+            response = _call_llm()
+        except CircuitBreakerOpenError:
+            logger.warning("Circuit breaker open, forcing finalize")
+            response = AIMessage(content="LLM service unavailable (circuit breaker open). Generating report with available findings.")
+            return {
+                "messages": [response],
+                "iteration": iteration + 1,
+                "forced_finalize": True,
+            }
+        except Exception as e:
+            logger.error("LLM call failed after retries: %s", e)
+            response = AIMessage(content=f"LLM call failed: {e}. Generating report with available findings.")
+            return {
+                "messages": [response],
+                "iteration": iteration + 1,
+                "forced_finalize": True,
+            }
 
         # 运行 after_model 中间件（循环检测、token 预算、密钥脱敏）
         response = chain.run_after_model(state_dict, response)

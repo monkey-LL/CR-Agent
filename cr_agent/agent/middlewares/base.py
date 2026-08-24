@@ -101,35 +101,47 @@ class MiddlewareChain:
     def run_before_model(self, state: dict) -> dict:
         """运行所有 before_model 钩子。返回可能被修改的 state。"""
         for mw in self.middlewares:
-            result = mw.before_model(state, self.ctx)
-            if result is not None:
-                logger.debug(f"Middleware {mw.name} modified state in before_model")
-                state = result
+            try:
+                result = mw.before_model(state, self.ctx)
+                if result is not None:
+                    logger.debug(f"Middleware {mw.name} modified state in before_model")
+                    state = result
+            except Exception as e:
+                logger.error(f"Middleware {mw.name} before_model error: {e}", exc_info=True)
         return state
 
     def run_after_model(self, state: dict, response: Any) -> Any:
         """运行所有 after_model 钩子。返回可能被修改的 response。"""
         for mw in self.middlewares:
-            result = mw.after_model(state, response, self.ctx)
-            if result is not None:
-                response = result
+            try:
+                result = mw.after_model(state, response, self.ctx)
+                if result is not None:
+                    response = result
+            except Exception as e:
+                logger.error(f"Middleware {mw.name} after_model error: {e}", exc_info=True)
         return response
 
     def run_before_tool(self, state: dict, tool_call: dict) -> dict | None:
         """运行所有 before_tool 钩子。返回错误字典以阻止执行，返回 None 表示允许。"""
         for mw in self.middlewares:
-            result = mw.before_tool(state, tool_call, self.ctx)
-            if result is not None:
-                logger.info(f"Middleware {mw.name} blocked tool {tool_call.get('name')}")
-                return result
+            try:
+                result = mw.before_tool(state, tool_call, self.ctx)
+                if result is not None:
+                    logger.info(f"Middleware {mw.name} blocked tool {tool_call.get('name')}")
+                    return result
+            except Exception as e:
+                logger.error(f"Middleware {mw.name} before_tool error: {e}", exc_info=True)
         return None
 
     def run_after_tool(self, state: dict, tool_result: str) -> str:
         """运行所有 after_tool 钩子。返回可能被修改的结果。"""
         for mw in self.middlewares:
-            result = mw.after_tool(state, tool_result, self.ctx)
-            if result is not None:
-                tool_result = result
+            try:
+                result = mw.after_tool(state, tool_result, self.ctx)
+                if result is not None:
+                    tool_result = result
+            except Exception as e:
+                logger.error(f"Middleware {mw.name} after_tool error: {e}", exc_info=True)
         return tool_result
 
     def should_finalize(self) -> bool:

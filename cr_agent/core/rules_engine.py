@@ -153,7 +153,7 @@ DETERMINISTIC_RULES: list[dict] = [
     },
     {
         "rule_id": "error-handling.pass-in-except",
-        "pattern": r"except\s+\w+.*:\s*\n\s*pass",
+        "pattern": r"except\s+\w+.*:\s*pass",
         "severity": Severity.MINOR,
         "message": "Silent exception handling — errors are swallowed without logging.",
         "suggestion": "At minimum, log the exception. Consider whether it should be re-raised.",

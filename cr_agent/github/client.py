@@ -67,6 +67,9 @@ def get_pr_diff(pr_number: int, repo: str, token: str | None = None) -> str:
     """使用 gh CLI 获取 PR 的 diff。
 
     gh pr diff <number> --repo <owner/repo>
+
+    Raises:
+        RuntimeError: gh CLI 执行失败（非零退出码或超时）。
     """
     env = {"GH_TOKEN": token} if token else None
     result = subprocess.run(
@@ -76,6 +79,10 @@ def get_pr_diff(pr_number: int, repo: str, token: str | None = None) -> str:
         timeout=30,
         env=build_safe_env(env),
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gh pr diff failed (exit {result.returncode}): {result.stderr[:200]}"
+        )
     diff = result.stdout
     return mask_secrets(diff)
 
@@ -84,6 +91,9 @@ def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
     """使用 gh CLI 获取 PR 元数据。
 
     gh pr view <number> --repo <owner/repo> --json number,title,author,body,baseRefName,headRefName
+
+    Raises:
+        RuntimeError: gh CLI 执行失败或返回非 JSON。
     """
     env = {"GH_TOKEN": token} if token else None
     result = subprocess.run(
@@ -96,7 +106,16 @@ def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
         timeout=30,
         env=build_safe_env(env),
     )
-    data = json.loads(result.stdout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gh pr view failed (exit {result.returncode}): {result.stderr[:200]}"
+        )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"gh pr view returned non-JSON output: {result.stdout[:200]}"
+        ) from e
     return PRInfo(
         number=data.get("number", pr_number),
         repo=repo,
@@ -114,8 +133,6 @@ def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = No
     幂等性：检查是否已存在 CR Agent 的评论，若存在则更新，
     而不是在重新审查时创建重复评论。通过 "## Code Review Report" 标题来识别评论。
     """
-    import os as _os
-
     env = {"GH_TOKEN": token} if token else None
     full_env = build_safe_env(env)
 
@@ -153,6 +170,12 @@ def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = No
                         break
         except (_json.JSONDecodeError, TypeError):
             pass
+    elif list_result.returncode != 0:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "gh pr view comments failed (exit %d): %s. Will create new comment.",
+            list_result.returncode, list_result.stderr[:200],
+        )
 
     if existing_comment_id:
         # 更新已有评论

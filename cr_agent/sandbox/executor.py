@@ -52,7 +52,7 @@ _FORBIDDEN_PATTERNS = re.compile(
 class SandboxConfig:
     """沙箱执行配置。"""
     timeout: int = 30
-    max_output_chars: int = 2000
+    max_output_chars: int = 20000
     allowed_cwd: str | None = None  # 如果设置，cwd 必须在此路径之下
 
 

@@ -33,6 +33,12 @@ GITHUB_TOKEN = os.environ.get("GH_TOKEN", "")
 _processed_deliveries: set[str] = set()
 _MAX_DEDUP = 1000
 
+if not WEBHOOK_SECRET:
+    logger.warning(
+        "GITHUB_WEBHOOK_SECRET not set — all webhooks will be rejected (401). "
+        "Set it to your GitHub webhook secret to enable webhook reviews."
+    )
+
 
 @app.post("/webhook")
 async def handle_webhook(

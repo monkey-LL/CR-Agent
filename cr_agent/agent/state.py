@@ -17,7 +17,7 @@ from typing import Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage
 
-from cr_agent.core.models import Finding, StaticAnalysisResult
+from cr_agent.core.models import Finding
 
 
 class AgentState(TypedDict):
@@ -28,11 +28,8 @@ class AgentState(TypedDict):
             使用 operator.add reducer，新消息会追加而非替换。
         diff: 原始 PR diff 文本，在开始时设置一次。
         pr_info: PR 元数据（编号、仓库、标题、作者、base/head 分支）。
-        deterministic_findings: 正则规则的发现，由 review 节点追加。
-        llm_findings: LLM 语义分析的发现，由 LLM 节点追加。
-        static_analysis: lint/type-check 工具的运行结果，由 sandbox 节点追加。
-        file_contents: 文件路径 → 完整内容的字典，供 Agent 读取的文件。
-        report: 最终的 ReviewReport，由 report 节点设置。
+        deterministic_findings: 正则规则的发现，由 prepare 节点设置。
+        report: 最终的 ReviewReport，由 finalize 节点设置。
         iteration: 工具调用循环次数（用于递归限制）。
         memory_context: 该仓库的历史审查模式，注入 LLM prompt
             让 Agent 优先关注反复出现的问题。
@@ -44,9 +41,6 @@ class AgentState(TypedDict):
     diff: str
     pr_info: dict
     deterministic_findings: Annotated[list[Finding], operator.add]
-    llm_findings: Annotated[list[Finding], operator.add]
-    static_analysis: Annotated[list[StaticAnalysisResult], operator.add]
-    file_contents: dict[str, str]
     report: dict | None
     iteration: int
     memory_context: str

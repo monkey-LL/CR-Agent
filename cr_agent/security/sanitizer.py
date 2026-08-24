@@ -47,6 +47,16 @@ SECRET_PATTERNS = [
     (re.compile(r"\bAKIA[A-Z0-9]{16}"), "AKIA[REDACTED]"),
     (re.compile(r"\bghp_[a-zA-Z0-9]{36}"), "ghp_[REDACTED]"),
     (re.compile(r"\bgithub_pat_[a-zA-Z0-9_]{82}"), "github_pat_[REDACTED]"),
+    # GitLab token
+    (re.compile(r"\bglpat-[a-zA-Z0-9_-]{20}"), "glpat-[REDACTED]"),
+    # Slack token
+    (re.compile(r"\bxox[baprs]-[a-zA-Z0-9-]{10,}"), "xox-[REDACTED]"),
+    # Stripe key
+    (re.compile(r"\bsk_live_[a-zA-Z0-9]{24,}"), "sk_live_[REDACTED]"),
+    # JWT (eyJ... 三段式)
+    (re.compile(r"\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}"), "eyJ[REDACTED]"),
+    # PEM 私钥块
+    (re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----"), "[PEM PRIVATE KEY REDACTED]"),
     # 通用 key=value 模式
     (re.compile(r"(?:api_key|apikey|token|secret|password)\s*[:=]\s*['\"]?[a-zA-Z0-9+/=_-]{16,}['\"]?", re.IGNORECASE), "[REDACTED]"),
     # Bearer token

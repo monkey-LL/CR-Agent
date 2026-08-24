@@ -49,9 +49,9 @@ def run_lint(command: str, cwd: str = ".") -> str:
         return f"Lint skipped: {output}"
 
     if exit_code == 0:
-        return f"Lint passed (exit 0):\n{output[:2000]}"
+        return f"Lint passed (exit 0):\n{output}"
     else:
-        return f"Lint failed (exit {exit_code}):\n{output[:2000]}"
+        return f"Lint failed (exit {exit_code}):\n{output}"
 
 
 @tool
