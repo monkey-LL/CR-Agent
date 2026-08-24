@@ -71,8 +71,9 @@ def save_review_memory(repo: str, pr_number: int, findings: list[dict], verdict:
     """
     # 保存到 SQLite
     try:
-        finding_types = list({f.get("rule_id", "unknown") for f in findings})
-        severities = list({f.get("severity", "info") for f in findings})
+        # 保持 finding_types 和 severities 的对应关系，不去重
+        finding_types = [f.get("rule_id", "unknown") for f in findings]
+        severities = [f.get("severity", "info") for f in findings]
 
         with _db_lock:
             conn = _get_db()
@@ -226,10 +227,13 @@ def build_memory_context(repo: str) -> str:
             for row in rows:
                 finding_types = json.loads(row[0]) if row[0] else []
                 severities = json.loads(row[1]) if row[1] else []
-                pattern_counts.update(finding_types)
+                # 只统计 blocker 和 major 级别的 pattern，避免误报强化确认偏误
+                for ft, sev in zip(finding_types, severities):
+                    if sev in ("blocker", "major"):
+                        pattern_counts[ft] += 1
                 severity_counts.update(severities)
 
-            # 最常见的前 5 种发现类型
+            # 最常见的前 5 种高危发现类型（仅 blocker + major）
             top_patterns = pattern_counts.most_common(5)
             patterns_text = ", ".join(f"{name} ({count}x)" for name, count in top_patterns)
 
@@ -243,10 +247,9 @@ def build_memory_context(repo: str) -> str:
 
             parts = [
                 f"\n## Repository Memory ({total_reviews} past reviews)",
-                f"Common issues found: {patterns_text}" if patterns_text else "",
+                f"High-severity patterns: {patterns_text}" if patterns_text else "",
                 f"Severity breakdown: {severity_text}" if severity_text else "",
                 f"Last review ({last_date}): {last_findings} findings, verdict={last_verdict}.",
-                "Pay extra attention to these patterns.",
             ]
             return "\n".join(p for p in parts if p) + "\n"
 

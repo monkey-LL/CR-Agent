@@ -42,7 +42,30 @@ SYSTEM_PROMPT = """\
    - 并发安全：竞态条件、死锁、线程安全
    - 可维护性：命名、结构、DRY 违反、缺失测试
    - API 兼容性：参数变更、返回值变更、破坏性改动
-6. 使用 generate_report 工具产出 JSON 格式的审查报告。
+6. 完成分析后，不要调用任何工具，直接在回复中输出 JSON 格式的审查结果。
+
+## 输出格式
+
+完成分析后，你的最后一条回复必须只包含以下 JSON（不要包裹在代码块中）：
+
+```json
+{
+  "summary": "1-3 句话的审查概述",
+  "findings": [
+    {
+      "rule_id": "llm.<简短标识>",
+      "severity": "blocker|major|minor|info",
+      "file": "文件路径",
+      "line": 行号,
+      "message": "具体问题描述",
+      "suggestion": "可执行的修复方案",
+      "confidence": "high|medium|low"
+    }
+  ]
+}
+```
+
+注意：verdict（审查结论）由系统根据 findings 的严重度自动判定，你不需要输出 verdict。
 
 ## 严重度定义
 
@@ -98,14 +121,6 @@ def build_review_prompt(
 
     memory_text = memory_context if memory_context else ""
 
-    # Truncate very large diffs to avoid token explosion
-    max_diff_chars = 50_000
-    truncated_note = ""
-    original_len = len(diff)
-    if original_len > max_diff_chars:
-        diff = diff[:max_diff_chars]
-        truncated_note = f"\n[注意：Diff 已截断至 {max_diff_chars} 字符，原始长度 {original_len} 字符。]"
-
     return f"""\
 请审查以下 Pull Request。
 
@@ -120,9 +135,8 @@ def build_review_prompt(
 ```diff
 {diff}
 ```
-{truncated_note}
 
-请分析此 diff 中的逻辑错误、安全风险、性能问题、并发安全和可维护性问题，然后调用 generate_report 提交你的审查结果。
+请分析此 diff 中的逻辑错误、安全风险、性能问题、并发安全和可维护性问题，然后直接在回复中输出 JSON 格式的审查结果（不要调用工具）。
 
 所有输出（summary、findings 的 message 和 suggestion）必须使用简体中文。
 """

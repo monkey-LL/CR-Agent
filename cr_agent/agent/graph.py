@@ -43,12 +43,23 @@ from cr_agent.security.sanitizer import sanitize_input
 logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 15
 
+# 模块级熔断器单例：跨多次审查共享状态，避免每次 build_graph 重置
+from cr_agent.observability.logger import CircuitBreaker as _CircuitBreaker
+_llm_circuit_breaker = _CircuitBreaker(threshold=5, recovery_timeout=60.0)
+
 
 def _prepare_review(state: AgentState) -> dict:
     """入口节点：确定性检查 + 构建 prompt。"""
     diff = state["diff"]
     pr_info = state["pr_info"]
     memory_context = state.get("memory_context", "")
+
+    # 在入口处截断 diff，确保后续所有环节使用同一份数据
+    max_diff_chars = 50_000
+    diff_truncated = False
+    if len(diff) > max_diff_chars:
+        diff = diff[:max_diff_chars]
+        diff_truncated = True
 
     hunks = parse_diff(diff)
     det_findings = run_deterministic_checks(hunks)
@@ -67,13 +78,15 @@ def _prepare_review(state: AgentState) -> dict:
     system_msg = SystemMessage(content=SYSTEM_PROMPT)
 
     logger.info(
-        "审查准备完成: %d 个文件, +%d/-%d 行, %d 条确定性发现",
+        "审查准备完成: %d 个文件, +%d/-%d 行, %d 条确定性发现%s",
         files_changed, lines_added, lines_removed, len(det_findings),
+        " (diff 已截断)" if diff_truncated else "",
     )
 
     return {
         "messages": [system_msg, user_msg],
         "deterministic_findings": det_findings,
+        "diff": diff,
         "report": None,
         "iteration": 0,
     }
@@ -81,9 +94,7 @@ def _prepare_review(state: AgentState) -> dict:
 
 def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
     """创建 LLM 决策节点，集成中间件。"""
-    from cr_agent.observability.logger import CircuitBreaker, CircuitBreakerOpenError, retry_with_backoff
-
-    circuit_breaker = CircuitBreaker(threshold=5, recovery_timeout=60.0)
+    from cr_agent.observability.logger import CircuitBreakerOpenError, retry_with_backoff
 
     def _llm_decide(state: AgentState) -> dict:
         iteration = state.get("iteration", 0)
@@ -106,7 +117,7 @@ def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
 
         @retry_with_backoff(max_retries=3, base_delay=1.0)
         def _call_llm():
-            return circuit_breaker.call(llm_with_tools.invoke, state_dict["messages"])
+            return _llm_circuit_breaker.call(llm_with_tools.invoke, state_dict["messages"])
 
         try:
             response = _call_llm()
@@ -198,41 +209,16 @@ def _should_continue(state: AgentState) -> str:
 
 
 def _finalize(state: AgentState) -> dict:
-    """从对话历史中构建最终的 ReviewReport。"""
+    """从最后一条 AIMessage 的 content 中解析 LLM 审查结果，构建 ReviewReport。"""
     det_findings = state.get("deterministic_findings", [])
     llm_findings: list[Finding] = []
 
+    # 找最后一条 AIMessage，从 content 解析 JSON
     for msg in reversed(state["messages"]):
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            for tc in msg.tool_calls:
-                if tc["name"] == "generate_report":
-                    args = tc["args"]
-                    raw_findings = args.get("findings", [])
-                    if isinstance(raw_findings, str):
-                        try:
-                            raw_findings = json.loads(raw_findings)
-                        except json.JSONDecodeError:
-                            raw_findings = []
-                    for rf in raw_findings:
-                        try:
-                            llm_findings.append(Finding(
-                                rule_id=rf.get("rule_id", "llm.unknown"),
-                                severity=Severity(rf.get("severity", "info")),
-                                file=rf.get("file"),
-                                line=rf.get("line"),
-                                message=rf.get("message", ""),
-                                suggestion=rf.get("suggestion", ""),
-                                confidence=Confidence(rf.get("confidence", "medium")),
-                                source="llm",
-                            ))
-                        except Exception as e:
-                            logger.warning(
-                                "跳过格式错误的 LLM finding: %s (数据: %s)",
-                                e, json.dumps(rf, ensure_ascii=False)[:200],
-                            )
-                    break
-            else:
-                continue
+        if isinstance(msg, AIMessage):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                llm_findings = _parse_llm_findings(content)
             break
 
     all_findings = det_findings + llm_findings
@@ -267,6 +253,62 @@ def _finalize(state: AgentState) -> dict:
     return {"report": report.model_dump()}
 
 
+def _parse_llm_findings(content: str) -> list[Finding]:
+    """从 LLM 回复文本中解析 JSON 格式的审查结果。
+
+    LLM 可能将 JSON 包裹在 ```json 代码块中或直接输出。
+    也可能 LLM 被强制终止时输出的是纯文本——此时返回空列表。
+    """
+    import re as _re
+
+    # 尝试提取 JSON：先找 ```json ... ``` 代码块，再找裸 JSON
+    json_str = None
+    json_block = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, _re.DOTALL)
+    if json_block:
+        json_str = json_block.group(1)
+    else:
+    # 尝试找第一个 { 到最后一个 } 之间的内容
+        first_brace = content.find("{")
+        last_brace = content.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            json_str = content[first_brace:last_brace + 1]
+
+    if not json_str:
+        logger.warning("LLM 回复中未找到 JSON 格式的审查结果")
+        return []
+
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.warning("LLM 回复的 JSON 解析失败: %s (内容前 200 字符: %s)", e, json_str[:200])
+        return []
+
+    raw_findings = data.get("findings", [])
+    if not isinstance(raw_findings, list):
+        return []
+
+    findings: list[Finding] = []
+    for rf in raw_findings:
+        try:
+            findings.append(Finding(
+                rule_id=rf.get("rule_id", "llm.unknown"),
+                severity=Severity(rf.get("severity", "info")),
+                file=rf.get("file"),
+                line=rf.get("line"),
+                message=rf.get("message", ""),
+                suggestion=rf.get("suggestion", ""),
+                confidence=Confidence(rf.get("confidence", "medium")),
+                source="llm",
+            ))
+        except Exception as e:
+            logger.warning(
+                "跳过格式错误的 LLM finding: %s (数据: %s)",
+                e, json.dumps(rf, ensure_ascii=False)[:200],
+            )
+
+    return findings
+
+
 def build_graph(model_name: str = "DeepSeek-V4-Flash", temperature: float = 0.1):
     """构建 LangGraph 状态机，集成中间件链。"""
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("XITA_API_KEY")
@@ -282,7 +324,10 @@ def build_graph(model_name: str = "DeepSeek-V4-Flash", temperature: float = 0.1)
     )
     chain = build_default_chain()
 
-    # 每次审查开始时重置中间件上下文，防止状态泄漏
+    # 每次审查开始时重置中间件上下文，防止状态泄漏。
+    # 注意：chain 与 graph 实例绑定，每次 build_graph 创建新的 chain。
+    # 调用方应每次审查调 build_graph()，不要复用 graph 实例跨多次 invoke，
+    # 否则 MiddlewareContext 可能在并发 invoke 间产生竞态。
     def prepare_with_reset(state: AgentState) -> dict:
         chain.reset()
         return _prepare_review(state)

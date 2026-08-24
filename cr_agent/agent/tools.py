@@ -127,4 +127,7 @@ def generate_report(
 
 
 # 暴露给 LLM 的工具列表
-ALL_TOOLS = [run_lint, read_file, generate_report]
+# 注意：generate_report 不再是工具，LLM 在分析完成后直接在回复中输出结构化 JSON，
+# finalize 节点解析最后一条 AIMessage 的 content 提取 findings。
+# verdict 由代码根据 findings 严重度自动判定，LLM 不需要也不应该传 verdict。
+ALL_TOOLS = [run_lint, read_file]

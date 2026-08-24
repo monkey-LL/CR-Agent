@@ -103,4 +103,5 @@ class TestMemorySystem:
         assert "Repository Memory" in ctx
         assert "3 past reviews" in ctx
         assert "security.sql-injection" in ctx
-        assert "debug.print-statement" in ctx
+        # D7: 记忆系统只统计 blocker+major，minor 级不注入 prompt 避免确认偏误
+        assert "debug.print-statement" not in ctx

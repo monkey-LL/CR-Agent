@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 class LoopDetectionMiddleware(Middleware):
     """通过工具调用去重和频率分析检测无限循环。
 
+    对不同工具采用不同策略：
+    - read_file：hash 包含返回内容，内容变化则不算重复（文件可能被修改）
+    - run_lint 等其他工具：仅 hash 工具名+参数（相同命令重复执行即为循环）
+
     Args:
         warn_threshold: 相同调用重复达到此次数 -> 注入警告。
         hard_limit: 相同调用重复达到此次数 -> 强制结束。
@@ -46,11 +50,15 @@ class LoopDetectionMiddleware(Middleware):
         self.window_size = window_size
         self._call_hashes: deque = deque(maxlen=window_size)
         self._tool_counts: Counter = Counter()
+        self._pending_tool_names: list[str] = []
+        self._result_hashes: dict[str, str] = {}
 
     def reset(self) -> None:
         """重置每次调用的状态。由 MiddlewareChain.reset() 调用。"""
         self._call_hashes.clear()
         self._tool_counts.clear()
+        self._pending_tool_names.clear()
+        self._result_hashes.clear()
 
     def _hash_call(self, tool_call: dict) -> str:
         """对工具调用进行哈希，用于去重检测。"""
@@ -62,11 +70,12 @@ class LoopDetectionMiddleware(Middleware):
         if not isinstance(response, AIMessage) or not response.tool_calls:
             return None
 
-        # 检查每个工具调用
+        self._pending_tool_names = []
         for tc in response.tool_calls:
             call_hash = self._hash_call(tc)
             self._call_hashes.append(call_hash)
             self._tool_counts[tc.get("name", "")] += 1
+            self._pending_tool_names.append(tc.get("name", ""))
 
             # 第一层：精确去重
             dup_count = sum(1 for h in self._call_hashes if h == call_hash)
@@ -76,7 +85,6 @@ class LoopDetectionMiddleware(Middleware):
                     "Loop detected: tool %s called %d times (hard limit %d). Forcing finalize.",
                     tc.get("name"), dup_count, self.hard_limit,
                 )
-                # 移除工具调用，强制结束
                 response.tool_calls = []
                 response.content = (
                     "I've detected I'm repeating the same tool calls. "
@@ -86,7 +94,6 @@ class LoopDetectionMiddleware(Middleware):
                 return response
 
             if dup_count >= self.warn_threshold:
-                # 注入提示但不阻止调用
                 hint = (
                     f"\n\n[Hint: You've called {tc.get('name')} with the same arguments "
                     f"{dup_count} times. Consider a different approach.]"
@@ -97,7 +104,7 @@ class LoopDetectionMiddleware(Middleware):
 
         # 第二层：频率检查
         for tool_name, count in self._tool_counts.items():
-            if count > 30:  # 硬频率上限
+            if count > 30:
                 logger.warning("Frequency limit: %s called %d times total", tool_name, count)
                 if tool_name not in ctx.blocked_tools:
                     ctx.blocked_tools.add(tool_name)
@@ -105,6 +112,24 @@ class LoopDetectionMiddleware(Middleware):
                         f"\n\n[Tool {tool_name} has been used {count} times and is now blocked. "
                         f"Use a different approach or generate the report.]"
                     )
+
+        return None
+
+    def after_tool(self, state: dict, tool_result: str, ctx: MiddlewareContext) -> str | None:
+        """对 read_file 的返回内容做 hash，如果内容变化则撤销之前的重复计数。"""
+        if not self._pending_tool_names:
+            return None
+
+        tool_name = self._pending_tool_names.pop(0)
+
+        if tool_name == "read_file":
+            result_hash = hashlib.sha256(tool_result.encode()).hexdigest()[:16]
+            prev_hash = self._result_hashes.get("read_file:last_result")
+            if prev_hash is not None and result_hash != prev_hash:
+            # 文件内容变化了，移除最近一次 call_hash（不算重复）
+                if self._call_hashes:
+                    self._call_hashes.pop()
+            self._result_hashes["read_file:last_result"] = result_hash
 
         return None
 
