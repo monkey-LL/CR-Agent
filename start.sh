@@ -6,14 +6,10 @@
 #   ./start.sh cli      → CLI 模式 (需传参数)
 #   ./start.sh test     → 运行测试
 
-export PYTHONPATH="/Users/monkeyll/CRagent"
-PYTHON="/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python"
+cd "$(dirname "$0")"
+export PYTHONPATH="$(pwd)"
 
-# ===== LLM 配置 =====
-# 请在 .env 文件中设置你的 API key，或直接 export 到环境变量
-# export OPENAI_API_KEY="your-key"
-# export OPENAI_BASE_URL="https://api.openai.com/v1"
-# export CR_MODEL="gpt-4o-mini"
+PYTHON=".venv/bin/python"
 
 # 加载 .env 文件（如果存在）
 if [ -f .env ]; then
@@ -24,13 +20,13 @@ MODE=${1:-web}
 
 case "$MODE" in
   web)
-    echo "🌐 启动 Web UI: http://localhost:8088"
-    echo "🤖 模型: ${CR_MODEL:-not set} (${OPENAI_BASE_URL:-default})"
+    echo "启动 Web UI: http://localhost:8088"
+    echo "模型: ${CR_MODEL:-DeepSeek-V4-Flash} (${OPENAI_BASE_URL:-default})"
     exec $PYTHON -m uvicorn cr_agent.web.server:app --port 8088
     ;;
   webhook)
-    echo "🔗 启动 GitHub Webhook 服务: http://localhost:8088/webhook"
-    echo "🤖 模型: ${CR_MODEL:-not set} (${OPENAI_BASE_URL:-default})"
+    echo "启动 GitHub Webhook 服务: http://localhost:8088/webhook"
+    echo "模型: ${CR_MODEL:-DeepSeek-V4-Flash} (${OPENAI_BASE_URL:-default})"
     exec $PYTHON -m uvicorn cr_agent.github.webhook_server:app --port 8088
     ;;
   cli)

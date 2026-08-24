@@ -1,15 +1,15 @@
-"""Metrics collector — tracks per-phase timing and token usage.
+"""指标收集器 — 追踪各阶段耗时和 token 使用量。
 
-Learning focus:
-  - Why measure per-phase timing: identify which step is slow (LLM vs tools vs parsing)
-  - Token tracking: understand the cost of each LLM call
-  - ContextVar for per-request isolation: concurrent reviews don't clobber each other
+学习重点：
+  - 为什么需要按阶段测量耗时：识别哪个步骤慢（LLM vs 工具 vs 解析）
+  - Token 追踪：了解每次 LLM 调用的成本
+  - 使用 ContextVar 实现请求级隔离：并发审查不会互相干扰
 
-The metrics flow:
-  1. graph.py calls record_phase() around each node
-  2. graph.py calls record_token_usage() after each LLM call
-  3. web/server.py reads get_metrics() and returns it to the frontend
-  4. index.html renders the metrics panel
+指标流转流程：
+  1. graph.py 在每个节点周围调用 record_phase()
+  2. graph.py 在每次 LLM 调用后调用 record_token_usage()
+  3. web/server.py 读取 get_metrics() 并返回给前端
+  4. index.html 渲染指标面板
 """
 
 from __future__ import annotations
@@ -23,14 +23,14 @@ from cr_agent.observability.logger import logger
 
 @dataclass
 class PhaseTiming:
-    """Timing for a single graph phase."""
+    """单个 graph 阶段的耗时记录。"""
     name: str
     elapsed_ms: float = 0.0
 
 
 @dataclass
 class TokenUsage:
-    """Token usage for a single LLM call."""
+    """单次 LLM 调用的 token 使用量。"""
     call_index: int
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -39,7 +39,7 @@ class TokenUsage:
 
     @property
     def estimated_cost_usd(self) -> float:
-        """Rough cost estimate for DeepSeek-V4-Flash pricing (~$0.14/M input, ~$0.28/M output)."""
+        """基于 DeepSeek-V4-Flash 定价的粗略成本估算（输入约 $0.14/百万 token，输出约 $0.28/百万 token）。"""
         return round(
             self.prompt_tokens * 0.14 / 1_000_000
             + self.completion_tokens * 0.28 / 1_000_000,
@@ -49,7 +49,7 @@ class TokenUsage:
 
 @dataclass
 class ReviewMetrics:
-    """All metrics for a single review run."""
+    """单次审查运行的所有指标。"""
     phases: list[PhaseTiming] = field(default_factory=list)
     token_usages: list[TokenUsage] = field(default_factory=list)
     total_elapsed_ms: float = 0.0
@@ -58,7 +58,7 @@ class ReviewMetrics:
     iteration_count: int = 0
 
     def to_dict(self) -> dict:
-        """Serialize for API response."""
+        """序列化为 API 响应格式。"""
         return {
             "phases": [
                 {"name": p.name, "elapsed_ms": round(p.elapsed_ms, 1)}
@@ -87,24 +87,24 @@ class ReviewMetrics:
         }
 
 
-# ContextVar: each request gets its own metrics instance (thread-safe for async)
+# ContextVar：每个请求拥有独立的指标实例（对异步是线程安全的）
 _current_metrics: ContextVar[ReviewMetrics | None] = ContextVar("_current_metrics", default=None)
 
 
 def init_metrics() -> ReviewMetrics:
-    """Initialize a fresh metrics instance for this request. Call at the start of a review."""
+    """为此请求初始化一个新的指标实例。在审查开始时调用。"""
     metrics = ReviewMetrics()
     _current_metrics.set(metrics)
     return metrics
 
 
 def get_metrics() -> ReviewMetrics | None:
-    """Get the current request's metrics, if any."""
+    """获取当前请求的指标实例，如果存在的话。"""
     return _current_metrics.get()
 
 
 def record_phase(name: str, start_time: float) -> None:
-    """Record the elapsed time of a phase. Call with time.time() captured before the phase."""
+    """记录一个阶段的耗时。传入在阶段开始前捕获的 time.time() 值。"""
     metrics = _current_metrics.get()
     if metrics is None:
         return
@@ -120,7 +120,7 @@ def record_token_usage(
     total_tokens: int,
     model: str,
 ) -> None:
-    """Record token usage from an LLM response."""
+    """记录 LLM 响应的 token 使用量。"""
     metrics = _current_metrics.get()
     if metrics is None:
         return
@@ -143,7 +143,7 @@ def record_token_usage(
 
 
 def record_tool_call() -> None:
-    """Increment the tool call counter."""
+    """递增工具调用计数器。"""
     metrics = _current_metrics.get()
     if metrics is None:
         return
@@ -151,7 +151,7 @@ def record_tool_call() -> None:
 
 
 def record_iteration() -> None:
-    """Increment the iteration counter."""
+    """递增迭代计数器。"""
     metrics = _current_metrics.get()
     if metrics is None:
         return
@@ -159,7 +159,7 @@ def record_iteration() -> None:
 
 
 def finalize_metrics() -> None:
-    """Mark metrics as complete and log summary."""
+    """标记指标为已完成并记录摘要。"""
     metrics = _current_metrics.get()
     if metrics is None:
         return

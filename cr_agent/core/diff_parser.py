@@ -1,18 +1,18 @@
-"""Unified diff parser — extracts structured hunks from raw diff text.
+"""Unified diff 解析器——从原始 diff 文本中提取结构化的 hunk。
 
-Learning focus:
-  - Text parsing with regex (unified diff format)
-  - Line-number tracking (old_start / new_start)
-  - Handling edge cases (dev/null, no newline, binary files)
+学习重点：
+  - 用正则表达式解析 unified diff 格式
+  - 行号追踪（old_start / new_start）
+  - 边界情况处理（/dev/null、no newline、二进制文件）
 
-The unified diff format:
-  --- a/file.py          (old file header)
-  +++ b/file.py          (new file header)
-  @@ -old_start,old_len +new_start,new_len @@  (hunk header)
-   context line          (leading space)
-  -removed line          (leading -)
-  +added line            (leading +)
-  \\ No newline at end    (metadata, skip)
+Unified diff 格式说明：
+  --- a/file.py          (旧文件头)
+  +++ b/file.py          (新文件头)
+  @@ -old_start,old_len +new_start,new_len @@  (hunk 头)
+   context line          (前导空格 = 上下文行)
+  -removed line          (前导 - = 删除行)
+  +added line            (前导 + = 新增行)
+  \\ No newline at end    (元数据，跳过)
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ HUNK_PATTERN = re.compile(
 
 @dataclass
 class DiffHunk:
-    """One hunk from a unified diff."""
+    """diff 中的一个 hunk（代码块变更单元）。"""
 
     file: str | None
     old_start: int | None
@@ -37,24 +37,23 @@ class DiffHunk:
 
     @property
     def added_lines(self) -> list[str]:
-        """Lines that were added (start with '+', not '+++')."""
+        """新增的行（以 '+' 开头，但不是 '+++' 文件头）。"""
         return [l[1:] for l in self.lines if l.startswith("+") and not l.startswith("+++")]
 
     @property
     def removed_lines(self) -> list[str]:
-        """Lines that were removed (start with '-', not '---')."""
+        """删除的行（以 '-' 开头，但不是 '---' 文件头）。"""
         return [l[1:] for l in self.lines if l.startswith("-") and not l.startswith("---")]
 
 
 def parse_diff(diff_text: str) -> list[DiffHunk]:
-    """Parse a unified diff string into structured hunks.
+    """将 unified diff 字符串解析为结构化的 hunk 列表。
 
     Args:
-        diff_text: Raw unified diff output (e.g. from `git diff` or `gh pr diff`).
+        diff_text: 原始 unified diff 输出（如来自 `git diff` 或 `gh pr diff`）。
 
     Returns:
-        List of DiffHunk objects, each containing file path, line numbers, and
-        the raw lines (with +/-/space prefixes preserved).
+        DiffHunk 对象列表，每个包含文件路径、行号和原始行（保留 +/-/空格 前缀）。
     """
     hunks: list[DiffHunk] = []
     current_file: str | None = None
@@ -66,10 +65,10 @@ def parse_diff(diff_text: str) -> list[DiffHunk]:
             if current_file in ("/dev/null", ""):
                 current_file = None
         elif raw_line.startswith("+++ /dev/null"):
-            # File deletion — no new file
+            # 文件删除——没有新文件
             current_file = None
         elif raw_line.startswith("--- "):
-            pass  # Old file header, we already track new file from +++
+            pass  # 旧文件头，我们通过 +++ 行追踪新文件即可
         elif raw_line.startswith("@@"):
             if current_hunk:
                 hunks.append(current_hunk)
@@ -80,12 +79,10 @@ def parse_diff(diff_text: str) -> list[DiffHunk]:
                 new_start=int(match.group("new_start")) if match else None,
             )
         elif current_hunk and (
-            raw_line.startswith("+")
-            or raw_line.startswith("-")
-            or raw_line.startswith(" ")
+            raw_line.startswith(("+", "-", " "))
         ):
             current_hunk.lines.append(raw_line)
-        # Lines starting with "\" (no newline marker) or anything else are skipped
+        # 以 "\" 开头的行（no newline 标记）或其他内容会被跳过
 
     if current_hunk:
         hunks.append(current_hunk)
@@ -94,7 +91,7 @@ def parse_diff(diff_text: str) -> list[DiffHunk]:
 
 
 def compute_metrics(hunks: list[DiffHunk]) -> tuple[int, int, int]:
-    """Compute (files_changed, lines_added, lines_removed) from hunks."""
+    """从 hunk 列表计算（变更文件数, 新增行数, 删除行数）。"""
     files: set[str | None] = set()
     added = 0
     removed = 0

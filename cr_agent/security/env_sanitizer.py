@@ -1,15 +1,15 @@
-"""Environment variable sanitizer — prevent secret leakage to subprocess.
+"""环境变量净化器 —— 防止 secret 泄露到 subprocess。
 
-Unhappy path:
-  Agent's process has OPENAI_API_KEY and GH_TOKEN in environment.
-  LLM says "run bash: env" → subprocess inherits all env vars →
-  API key printed in tool output → goes to LLM → might end up in PR comment.
+异常场景:
+  Agent 进程的环境变量中包含 OPENAI_API_KEY 和 GH_TOKEN。
+  LLM 说 "run bash: env" → subprocess 继承所有环境变量 →
+  API key 打印在工具输出中 → 传给 LLM → 可能最终出现在 PR 评论中。
 
-Solution:
-  Build a sanitized env dict for subprocess that:
-  1. Only passes through whitelisted vars (PATH, HOME, LANG, etc.)
-  2. Replaces *KEY*/*SECRET*/*TOKEN* patterns with [REDACTED]
-  3. Explicitly passes GH_TOKEN only when needed (not by default)
+解决方案:
+  为 subprocess 构建一个净化后的环境变量字典:
+  1. 仅传递白名单变量（PATH、HOME、LANG 等）
+  2. 将匹配 *KEY*/*SECRET*/*TOKEN* 模式的变量替换为 [REDACTED]
+  3. 仅在需要时显式传递 GH_TOKEN（默认不传递）
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from __future__ import annotations
 import os
 import re
 
-# Variables that are safe to pass through to subprocess
+# 可以安全传递给 subprocess 的变量
 SAFE_ENV_VARS = {
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
     "TERM", "SHELL", "TMPDIR", "TMP", "TEMP",
-    "SYSTEMROOT", "COMSPEC",  # Windows
+    "SYSTEMROOT", "COMSPEC",  # Windows 系统
 }
 
-# Patterns that indicate a secret variable
+# 表示 secret 变量的匹配模式
 SECRET_PATTERNS = re.compile(
     r"(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE|API)",
     re.IGNORECASE,
@@ -32,14 +32,14 @@ SECRET_PATTERNS = re.compile(
 
 
 def build_safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Build a sanitized environment dict for subprocess execution.
+    """为 subprocess 执行构建净化后的环境变量字典。
 
-    Only passes through safe variables. Any var matching SECRET_PATTERNS
-    is replaced with [REDACTED].
+    仅传递安全变量。任何匹配 SECRET_PATTERNS 的变量
+    会被替换为 [REDACTED]。
 
     Args:
-        extra: Additional vars to explicitly inject (e.g., {"GH_TOKEN": "xxx"}).
-               These are added as-is; the caller decides what to expose.
+        extra: 需要显式注入的额外变量（例如 {"GH_TOKEN": "xxx"}）。
+               这些变量按原样添加，由调用者决定暴露哪些内容。
     """
     safe: dict[str, str] = {}
     for key, value in os.environ.items():
@@ -47,7 +47,7 @@ def build_safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
             safe[key] = value
         elif SECRET_PATTERNS.search(key):
             safe[key] = "[REDACTED]"
-        # Other vars are simply not passed through
+        # 其他变量不传递
 
     if extra:
         safe.update(extra)

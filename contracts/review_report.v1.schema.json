@@ -1,7 +1,7 @@
 {
   "$defs": {
     "Confidence": {
-      "description": "How confident the reviewer is in this finding.",
+      "description": "审查者对此发现的置信度。",
       "enum": [
         "high",
         "medium",
@@ -11,7 +11,7 @@
       "type": "string"
     },
     "DiffMetrics": {
-      "description": "Statistics about the reviewed diff.",
+      "description": "diff 统计信息。",
       "properties": {
         "files_changed": {
           "default": 0,
@@ -33,7 +33,7 @@
       "type": "object"
     },
     "Finding": {
-      "description": "A single code review finding.",
+      "description": "单条代码审查发现。",
       "properties": {
         "rule_id": {
           "title": "Rule Id",
@@ -98,7 +98,7 @@
       "type": "object"
     },
     "Severity": {
-      "description": "Finding severity levels, ordered by impact.",
+      "description": "发现严重度级别，按影响从高到低排列。",
       "enum": [
         "blocker",
         "major",
@@ -109,7 +109,7 @@
       "type": "string"
     },
     "StaticAnalysisResult": {
-      "description": "Result of a single static analysis tool (lint, type-check).",
+      "description": "单次静态分析工具（lint、type-check）的运行结果。",
       "properties": {
         "tool": {
           "title": "Tool",
@@ -150,7 +150,7 @@
       "type": "object"
     },
     "Verdict": {
-      "description": "Overall review conclusion.",
+      "description": "整体审查结论。",
       "enum": [
         "approve",
         "request_changes",
@@ -160,7 +160,7 @@
       "type": "string"
     }
   },
-  "description": "Complete review report posted as a PR comment.",
+  "description": "完整审查报告，会作为 PR 评论发布。",
   "properties": {
     "schema_version": {
       "default": "cr-agent.report.v1",

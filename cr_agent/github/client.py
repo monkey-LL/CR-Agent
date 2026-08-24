@@ -1,19 +1,19 @@
-"""GitHub: webhook server, HMAC verification, PR operations.
+"""GitHub：webhook 服务器、HMAC 验证、PR 操作。
 
-Learning focus:
-  - HMAC webhook verification: why and how (prevent forged webhooks)
-  - GitHub API via gh CLI: no API library needed, just subprocess
-  - PR comment idempotency: update existing comment vs create new
-  - Token injection: GH_TOKEN env var, never in prompts or logs
+学习重点：
+  - HMAC webhook 验证：为什么需要以及如何实现（防止伪造的 webhook）
+  - 通过 gh CLI 调用 GitHub API：无需 API 库，只需 subprocess
+  - PR 评论的幂等性：更新已有评论 vs 创建新评论
+  - Token 注入：通过 GH_TOKEN 环境变量传入，绝不出现在提示词或日志中
 
-Two modes of operation:
-  1. Webhook mode: FastAPI server receives GitHub webhooks, triggers review
-  2. CLI mode: manually review a PR by number (for testing/learning)
+两种运行模式：
+  1. Webhook 模式：FastAPI 服务器接收 GitHub webhook，触发代码审查
+  2. CLI 模式：通过 PR 编号手动审查（用于测试/学习）
 
-Why gh CLI instead of PyGithub/requests?
-  - gh handles auth, pagination, rate limiting automatically
-  - Less code, fewer dependencies
-  - The token is injected via GH_TOKEN env var, never in our code
+为什么用 gh CLI 而不是 PyGithub/requests？
+  - gh 自动处理认证、分页、速率限制
+  - 代码更少，依赖更少
+  - Token 通过 GH_TOKEN 环境变量注入，不会出现在我们的代码中
 """
 
 from __future__ import annotations
@@ -21,18 +21,20 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 
 from cr_agent.security.sanitizer import mask_secrets
+from cr_agent.security.env_sanitizer import build_safe_env
 
 
 @dataclass
 class PRInfo:
-    """PR metadata extracted from GitHub."""
+    """从 GitHub 提取的 PR 元数据。"""
 
     number: int
-    repo: str  # owner/repo format
+    repo: str  # owner/repo 格式
     title: str = ""
     author: str = ""
     body: str = ""
@@ -41,15 +43,15 @@ class PRInfo:
 
 
 def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
-    """Verify GitHub webhook HMAC-SHA256 signature.
+    """验证 GitHub webhook 的 HMAC-SHA256 签名。
 
-    GitHub sends X-Hub-Signature-256: sha256=<hex_digest>
-    We recompute the HMAC with our secret and compare.
+    GitHub 发送 X-Hub-Signature-256: sha256=<hex_digest>
+    我们用密钥重新计算 HMAC 并进行比较。
 
-    Why? Without this, anyone could POST fake webhooks to trigger reviews
-    on arbitrary PRs, or worse, extract our review output.
+    为什么需要验证？没有验证的话，任何人都可以发送伪造的 webhook 来触发
+   任意 PR 的审查，甚至更糟，窃取我们的审查结果。
 
-    Constant-time comparison (hmac.compare_digest) prevents timing attacks.
+    常量时间比较（hmac.compare_digest）可防止时序攻击。
     """
     if not signature or not secret:
         return False
@@ -62,7 +64,7 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
 
 
 def get_pr_diff(pr_number: int, repo: str, token: str | None = None) -> str:
-    """Get the diff for a PR using gh CLI.
+    """使用 gh CLI 获取 PR 的 diff。
 
     gh pr diff <number> --repo <owner/repo>
     """
@@ -72,14 +74,14 @@ def get_pr_diff(pr_number: int, repo: str, token: str | None = None) -> str:
         capture_output=True,
         text=True,
         timeout=30,
-        env={**__import__("os").environ, **(env or {})},
+        env=build_safe_env(env),
     )
     diff = result.stdout
     return mask_secrets(diff)
 
 
 def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
-    """Get PR metadata using gh CLI.
+    """使用 gh CLI 获取 PR 元数据。
 
     gh pr view <number> --repo <owner/repo> --json number,title,author,body,baseRefName,headRefName
     """
@@ -92,7 +94,7 @@ def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
         capture_output=True,
         text=True,
         timeout=30,
-        env={**__import__("os").environ, **(env or {})},
+        env=build_safe_env(env),
     )
     data = json.loads(result.stdout)
     return PRInfo(
@@ -107,43 +109,78 @@ def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
 
 
 def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = None) -> bool:
-    """Post a comment on a PR using gh CLI.
+    """使用 gh CLI 在 PR 上发表评论。
 
-    Idempotency: checks for existing CR comment and updates it if found,
-    rather than creating duplicates on re-reviews.
+    幂等性：检查是否已存在 CR Agent 的评论，若存在则更新，
+    而不是在重新审查时创建重复评论。通过 "## Code Review Report" 标题来识别评论。
     """
-    env = {"GH_TOKEN": token} if token else None
-    full_env = {**__import__("os").environ, **(env or {})}
+    import os as _os
 
-    # Check for existing review comment (idempotency)
+    env = {"GH_TOKEN": token} if token else None
+    full_env = build_safe_env(env)
+
+    # 检查已有的审查评论（幂等性）
     list_result = subprocess.run(
         ["gh", "pr", "view", str(pr_number), "--repo", repo,
-         "--json", "comments", "--jq", ".comments[].body"],
+         "--json", "comments", "--jq", ".comments[] | {id: .id, body: .body}"],
         capture_output=True,
         text=True,
         timeout=30,
         env=full_env,
     )
 
-    existing_comments = list_result.stdout.strip().split("\n") if list_result.stdout.strip() else []
+    # 通过标题查找已有的 CR Agent 评论
+    existing_comment_id = None
+    if list_result.returncode == 0 and list_result.stdout.strip():
+        try:
+            import json as _json
+            comments = _json.loads(list_result.stdout) if list_result.stdout.strip().startswith("[") else None
+            if comments is None:
+                # 尝试逐行解析 JSON（jq 每行输出一个 JSON 对象）
+                for line in list_result.stdout.strip().split("\n"):
+                    if line.strip():
+                        try:
+                            c = _json.loads(line)
+                            if "Code Review Report" in c.get("body", ""):
+                                existing_comment_id = str(c.get("id", ""))
+                                break
+                        except _json.JSONDecodeError:
+                            continue
+            elif isinstance(comments, list):
+                for c in comments:
+                    if isinstance(c, dict) and "Code Review Report" in c.get("body", ""):
+                        existing_comment_id = str(c.get("id", ""))
+                        break
+        except (_json.JSONDecodeError, TypeError):
+            pass
 
-    # If any existing comment starts with our header, update it
-    # (In production, you'd get the comment ID and use gh pr edit-comment)
-    # For simplicity, we just post a new comment here
-    result = subprocess.run(
-        ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=full_env,
-    )
-    return result.returncode == 0
+    if existing_comment_id:
+        # 更新已有评论
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/comments/{existing_comment_id}",
+             "--method", "PATCH", "--field", f"body={body}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=full_env,
+        )
+        return result.returncode == 0
+    else:
+        # 创建新评论
+        result = subprocess.run(
+            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=full_env,
+        )
+        return result.returncode == 0
 
 
 def parse_webhook_payload(payload: bytes) -> dict | None:
-    """Parse a GitHub webhook payload and extract PR info if it's a PR event.
+    """解析 GitHub webhook 负载，如果是 PR 事件则提取 PR 信息。
 
-    Returns None for non-PR events.
+    非 PR 事件返回 None。
     """
     try:
         data = json.loads(payload)

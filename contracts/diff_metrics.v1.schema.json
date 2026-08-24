@@ -1,5 +1,5 @@
 {
-  "description": "Statistics about the reviewed diff.",
+  "description": "diff 统计信息。",
   "properties": {
     "files_changed": {
       "default": 0,
