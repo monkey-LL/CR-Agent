@@ -1,15 +1,15 @@
-"""Web UI API server — provides REST endpoints for the frontend.
+"""Web UI API 服务器 — 为前端提供 REST 端点。
 
-Learning focus:
-  - FastAPI serving both API and static files
-  - How to bridge web UI ↔ agent graph
-  - Server-Sent Events (SSE) for streaming review progress
+学习重点:
+  - FastAPI 同时提供 API 和静态文件服务
+  - 如何桥接 Web UI ↔ agent graph
+  - 使用 Server-Sent Events (SSE) 流式传输审查进度
 
-Endpoints:
+端点:
   GET  /              → Web UI (HTML)
-  POST /api/review    → Trigger a review (returns report)
-  GET  /api/health    → Health check
-  GET  /api/rules     → List deterministic rules
+  POST /api/review    → 触发代码审查（返回报告）
+  GET  /api/health    → 健康检查
+  GET  /api/rules     → 列出确定性规则
 """
 
 from __future__ import annotations
@@ -22,13 +22,14 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from cr_agent.observability.logger import logger
-from cr_agent.core.rules_engine import DETERMINISTIC_RULES
-from cr_agent.core.diff_parser import parse_diff, compute_metrics
+from cr_agent.core.diff_parser import compute_metrics, parse_diff
 from cr_agent.core.models import (
-    ReviewReport, DiffMetrics, determine_verdict,
-    Finding, Severity, Confidence,
+    DiffMetrics,
+    ReviewReport,
+    determine_verdict,
 )
+from cr_agent.core.rules_engine import DETERMINISTIC_RULES
+from cr_agent.observability.logger import logger
 
 app = FastAPI(title="CR Agent Web UI")
 
@@ -36,7 +37,7 @@ WEB_DIR = Path(__file__).parent
 
 
 class ReviewRequest(BaseModel):
-    """Request body for POST /api/review."""
+    """POST /api/review 的请求体。"""
 
     diff: str
     pr_title: str = "Untitled PR"
@@ -47,7 +48,7 @@ class ReviewRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve the web UI."""
+    """提供 Web UI 页面。"""
     html_path = WEB_DIR / "index.html"
     return HTMLResponse(html_path.read_text())
 
@@ -59,7 +60,7 @@ async def health():
 
 @app.get("/api/rules")
 async def list_rules():
-    """List all deterministic rules (for the UI to display)."""
+    """列出所有确定性规则（供 UI 展示）。"""
     return [
         {
             "rule_id": r["rule_id"],
@@ -72,10 +73,10 @@ async def list_rules():
 
 @app.post("/api/review")
 async def review(req: ReviewRequest):
-    """Run a code review and return the report.
+    """执行代码审查并返回报告。
 
-    If use_llm=False (default), only runs deterministic checks — fast, free.
-    If use_llm=True, runs the full LangGraph agent with LLM semantic analysis.
+    如果 use_llm=False（默认），仅运行确定性检查 — 快速、免费。
+    如果 use_llm=True，运行完整的 LangGraph agent 进行 LLM 语义分析。
     """
     start = time.time()
 
@@ -95,13 +96,13 @@ async def review(req: ReviewRequest):
     }
 
     if req.use_llm:
-        # Full LLM review
+        # 完整 LLM 审查
         try:
             from cr_agent.agent.graph import build_graph
             from cr_agent.observability.metrics import get_metrics
             model = req.model or os.environ.get("CR_MODEL", "DeepSeek-V4-Flash")
             graph = build_graph(model_name=model)
-            result = graph.invoke({"diff": req.diff, "pr_info": pr_info})
+            result = graph.invoke({"diff": req.diff, "pr_info": pr_info, "memory_context": ""})
             report = ReviewReport(**result["report"])
             review_metrics = get_metrics()
         except Exception as e:
@@ -127,7 +128,7 @@ async def review(req: ReviewRequest):
 
 
 def _deterministic_only(diff: str, pr_info: dict) -> ReviewReport:
-    """Run only deterministic checks (no LLM)."""
+    """仅运行确定性检查（不使用 LLM）。"""
     from cr_agent.core.rules_engine import run_deterministic_checks
 
     hunks = parse_diff(diff)

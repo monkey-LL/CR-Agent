@@ -1,11 +1,11 @@
-"""FastAPI webhook server with idempotency, trace ID, and memory integration.
+"""FastAPI webhook 服务器，支持幂等性、trace ID 和记忆系统集成。
 
-Production features:
-  - HMAC verification (prevent forged webhooks)
-  - Idempotency store (prevent duplicate reviews from webhook redelivery)
-  - Trace ID (follow one review across all log lines)
-  - Memory system (learn from past reviews)
-  - Background tasks (return 200 fast, review runs async)
+生产环境特性：
+  - HMAC 验证（防止伪造的 webhook）
+  - 幂等性存储（防止 webhook 重复投递导致的重复审查）
+  - Trace ID（跨所有日志行追踪一次完整的审查过程）
+  - 记忆系统（从过往审查中学习）
+  - 后台任务（快速返回 200，审查异步执行）
 """
 
 from __future__ import annotations
@@ -13,16 +13,18 @@ from __future__ import annotations
 import os
 import time
 
-from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
-from cr_agent.observability.logger import logger
-from cr_agent.observability.tracing import new_trace_id, get_trace_id
-from cr_agent.observability.idempotency import get_idempotency_store
+from cr_agent.agent.memory import build_memory_context, save_review_memory
 from cr_agent.github.client import (
-    verify_webhook_signature, parse_webhook_payload,
-    get_pr_diff, get_pr_info, post_pr_comment,
+    get_pr_diff,
+    parse_webhook_payload,
+    post_pr_comment,
+    verify_webhook_signature,
 )
-from cr_agent.agent.memory import save_review_memory, build_memory_context
+from cr_agent.observability.idempotency import get_idempotency_store
+from cr_agent.observability.logger import logger
+from cr_agent.observability.tracing import new_trace_id
 
 app = FastAPI(title="CR Agent Webhook Server")
 
@@ -42,12 +44,12 @@ async def handle_webhook(
 ):
     body = await request.body()
 
-    # 1. HMAC verification
+    # 1. HMAC 验证
     if not verify_webhook_signature(body, x_hub_signature_256, WEBHOOK_SECRET):
         logger.warning("webhook.signature_failed", delivery=x_github_delivery)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # 2. Deduplication by delivery ID
+    # 2. 按 delivery ID 去重
     if x_github_delivery in _processed_deliveries:
         logger.info("webhook.duplicate", delivery=x_github_delivery)
         return {"status": "duplicate", "delivery": x_github_delivery}
@@ -56,7 +58,7 @@ async def handle_webhook(
         _processed_deliveries.clear()
         _processed_deliveries.add(x_github_delivery)
 
-    # 3. Parse payload
+    # 3. 解析负载
     pr_data = parse_webhook_payload(body)
     if pr_data is None:
         return {"status": "ignored", "event": x_github_event}
@@ -66,7 +68,7 @@ async def handle_webhook(
     repo = pr_data["repo"]
     pr_number = pr_data["number"]
 
-    # 4. Idempotency check — prevent duplicate/concurrent reviews
+    # 4. 幂等性检查 — 防止重复/并发审查
     trace_id = new_trace_id()
     idempotency = get_idempotency_store()
     if not idempotency.try_acquire(repo, pr_number, trace_id):
@@ -75,7 +77,7 @@ async def handle_webhook(
 
     logger.info("webhook.received", event=x_github_event, repo=repo, pr=pr_number, trace=trace_id)
 
-    # 5. Schedule review in background
+    # 5. 在后台调度审查任务
     background_tasks.add_task(_run_review, pr_data, trace_id)
     return {"status": "accepted", "pr": pr_number, "repo": repo, "trace": trace_id}
 
@@ -86,12 +88,12 @@ async def health():
 
 
 def _run_review(pr_data: dict, trace_id: str):
-    """Background task with idempotency lifecycle + memory."""
+    """后台任务，包含幂等性生命周期管理和记忆系统。"""
     from cr_agent.agent.graph import build_graph
     from cr_agent.core.models import ReviewReport
-    from cr_agent.observability.tracing import new_trace_id
+    from cr_agent.observability.tracing import set_trace_id
 
-    new_trace_id(trace_id)  # Re-bind trace ID for background context
+    set_trace_id(trace_id)  # 为后台上下文重新绑定 trace ID(不生成新 ID)
     start_time = time.time()
     repo = pr_data["repo"]
     pr_number = pr_data["number"]
@@ -109,23 +111,27 @@ def _run_review(pr_data: dict, trace_id: str):
             "head": pr_data.get("head", ""),
         }
 
-        # Load repository memory for context
+        # 加载仓库记忆作为上下文
         memory_context = build_memory_context(repo)
 
         model = os.environ.get("CR_MODEL", "DeepSeek-V4-Flash")
         graph = build_graph(model_name=model)
-        result = graph.invoke({"diff": diff, "pr_info": pr_info})
+        result = graph.invoke({
+            "diff": diff,
+            "pr_info": pr_info,
+            "memory_context": memory_context,
+        })
 
         report_data = result.get("report")
         if report_data:
             report = ReviewReport(**report_data)
             markdown = report.to_markdown()
 
-            # Post comment
+            # 发表评论
             success = post_pr_comment(pr_number, repo, markdown, GITHUB_TOKEN)
 
-            # Save to memory
-            save_review_memory(repo, pr_number, report_data.get("findings", []), report.verdict.value)
+            # 保存到记忆
+            save_review_memory(repo, pr_number, report_data.get("findings", []), report.verdict.value, trace_id=trace_id)
 
             elapsed = time.time() - start_time
             logger.info(

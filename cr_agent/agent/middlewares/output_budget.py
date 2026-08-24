@@ -1,16 +1,16 @@
-"""ToolOutputBudgetMiddleware — truncate tool output to protect token budget.
+"""ToolOutputBudgetMiddleware —— 截断工具输出以保护 token 预算。
 
-Unhappy path:
-  LLM calls run_lint("ruff check .") on a messy project → 50,000 chars of lint output
-  This goes into the conversation as a ToolMessage → next LLM call has 50K extra tokens
-  → token budget exhausted → review incomplete
+异常场景：
+  LLM 在一个混乱的项目上调用 run_lint("ruff check .") → 50,000 字符的 lint 输出
+  这些内容作为 ToolMessage 进入对话 → 下一次 LLM 调用多出 50K token
+  → token 预算耗尽 → 审查不完整
 
-Production principle:
-  Tool output is useful but not infinitely useful. The first 20K chars of lint output
-  tell you everything you need. The remaining 30K is just more of the same.
+生产环境原则：
+  工具输出有用，但并非越多越好。lint 输出的前 20K 字符已经包含了
+  你需要的所有信息。剩下的 30K 只是重复内容。
 
-  We truncate and add a note: "[output truncated, 50000 → 20000 chars]"
-  The LLM knows it's seeing partial output and can decide if it needs more.
+  我们截断输出并添加提示："[output truncated, 50000 → 20000 chars]"
+  LLM 知道自己看到的是部分输出，可以决定是否需要更多信息。
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 class ToolOutputBudgetMiddleware(Middleware):
-    """Truncate tool outputs that exceed a character limit.
+    """截断超过字符限制的工具输出。
 
     Args:
-        max_chars: Maximum characters to keep in tool output.
+        max_chars: 工具输出中保留的最大字符数。
     """
 
     def __init__(self, max_chars: int = 20000):

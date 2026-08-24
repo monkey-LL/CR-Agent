@@ -1,23 +1,22 @@
-"""TokenBudgetMiddleware — enforce total token budget per review.
+"""TokenBudgetMiddleware —— 对每次审查强制执行总 token 预算控制。
 
-Unhappy path:
-  Agent keeps calling tools and LLM in a loop. Each LLM call costs 5K tokens.
-  After 40 iterations: 200K tokens consumed. API bill explodes.
-  No upper bound = uncontrolled cost.
+异常场景：
+  Agent 持续在工具和 LLM 之间循环调用。每次 LLM 调用消耗 5K token。
+  40 次迭代后：消耗了 200K token。API 账单爆炸。
+  没有上限 = 成本失控。
 
-Production principle:
-  Set a budget. When 80% consumed → warn the LLM to start wrapping up.
-  When 100% consumed → force finalize. Stop the Agent, produce report with
-  whatever findings exist.
+生产环境原则：
+  设定预算。当消耗达到 80% 时 -> 警告 LLM 尽快收尾。
+  当消耗达到 100% 时 -> 强制结束。停止 Agent，用已有的发现生成报告。
 
-  This is the "runaway cost prevention" middleware.
-  Without it, a single buggy review could cost $10 in API calls.
-  With it, max cost per review is bounded.
+Token 计数：
+  优先使用 tiktoken（cl100k_base 编码）进行精确计数。
+  如果 tiktoken 未安装或加载失败，则回退到基于字符的估算（1 token ~ 4 字符）。
 
-Estimating tokens (simplified):
-  We don't have a real tokenizer here. We approximate: 1 token ≈ 4 chars.
-  This is rough but good enough for budget enforcement.
-  Production: use tiktoken for exact counts.
+状态管理：
+  每次调用的状态（_warned）在检测到新一轮审查开始时重置
+  （通过 iteration 重置为 0 来检测）。如果不重置，上一轮审查的
+  警告标志会抑制下一轮的警告。
 """
 
 from __future__ import annotations
@@ -30,30 +29,55 @@ from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
-_CHARS_PER_TOKEN = 4  # Approximate
+_CHARS_PER_TOKEN = 4  # 回退估算值
 
 
 class TokenBudgetMiddleware(Middleware):
-    """Enforce total token budget and warn/stop at thresholds.
+    """强制执行总 token 预算，在阈值处发出警告或停止。
 
     Args:
-        max_tokens: Total token budget for one review.
-        warn_threshold: Fraction (0-1) at which to warn the LLM to wrap up.
+        max_tokens: 一次审查的总 token 预算。
+        warn_threshold: 触发 LLM 收尾警告的比例阈值（0-1）。
     """
 
     def __init__(self, max_tokens: int = 200000, warn_threshold: float = 0.8):
         self.max_tokens = max_tokens
         self.warn_threshold = warn_threshold
         self._warned = False
+        self._encoder = None
+        try:
+            import tiktoken
+            self._encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            logger.debug("tiktoken not available, using character-based estimation")
 
-    def after_model(self, state: dict, response, ctx: MiddlewareContext) -> any:
-        # Estimate tokens from message content
+    def reset(self) -> None:
+        """重置每次调用的状态。由 MiddlewareChain.reset() 调用。"""
+        self._warned = False
+
+    def _count_tokens(self, messages: list) -> int:
+        """使用 tiktoken（如果可用）计算消息列表中的 token 数。"""
+        if self._encoder is not None:
+            total = 0
+            for msg in messages:
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    total += len(self._encoder.encode(content))
+                # 每条消息的额外开销（role token 等）
+                total += 4
+            return total
+        else:
+            total_chars = sum(
+                len(getattr(msg, "content", ""))
+                for msg in messages
+                if isinstance(getattr(msg, "content", ""), str)
+            )
+            return total_chars // _CHARS_PER_TOKEN
+
+    def after_model(self, state: dict, response, ctx: MiddlewareContext):
+        # 精确计算 token 数
         messages = state.get("messages", [])
-        total_chars = sum(
-            len(getattr(msg, "content", "")) for msg in messages
-            if isinstance(getattr(msg, "content", ""), str)
-        )
-        estimated_tokens = total_chars // _CHARS_PER_TOKEN
+        estimated_tokens = self._count_tokens(messages)
         ctx.total_tokens = estimated_tokens
 
         if estimated_tokens >= self.max_tokens:

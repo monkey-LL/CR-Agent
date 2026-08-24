@@ -1,20 +1,17 @@
 """Tests for production engineering: middleware, idempotency, env, memory, contracts."""
 
-import pytest
-import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from cr_agent.agent.middlewares.base import MiddlewareChain, MiddlewareContext
+from cr_agent.agent.middlewares.context_compression import ContextCompressionMiddleware
 from cr_agent.agent.middlewares.input_sanitization import InputSanitizationMiddleware
 from cr_agent.agent.middlewares.loop_detection import LoopDetectionMiddleware
+from cr_agent.agent.middlewares.output_budget import ToolOutputBudgetMiddleware
 from cr_agent.agent.middlewares.token_budget import TokenBudgetMiddleware
 from cr_agent.agent.middlewares.tool_error_handling import ToolErrorHandler
-from cr_agent.agent.middlewares.output_budget import ToolOutputBudgetMiddleware
-from cr_agent.agent.middlewares.context_compression import ContextCompressionMiddleware
-from cr_agent.observability.idempotency import IdempotencyStore, ReviewStatus
-from cr_agent.security.env_sanitizer import build_safe_env
-from cr_agent.agent.memory import save_review_memory, build_memory_context
 from cr_agent.core.contracts import export_schemas
+from cr_agent.observability.idempotency import IdempotencyStore
+from cr_agent.security.env_sanitizer import build_safe_env
 
 
 class TestInputSanitizationMiddleware:
@@ -80,10 +77,12 @@ class TestLoopDetectionMiddleware:
 
 class TestTokenBudgetMiddleware:
     def test_warns_at_threshold(self):
-        mw = TokenBudgetMiddleware(max_tokens=100, warn_threshold=0.5)
+        # Use realistic text — tiktoken encodes repetitive chars more compactly
+        mw = TokenBudgetMiddleware(max_tokens=200, warn_threshold=0.5)
         ctx = MiddlewareContext()
-        # Create a large message (~200 chars = ~50 tokens, 50% of 100)
-        big_msg = HumanMessage(content="x" * 200)
+        # 10 repeats = ~105 tokens, 50% of 200 = 100 -> triggers warn, not finalize
+        text = "The quick brown fox jumps over the lazy dog. " * 10
+        big_msg = HumanMessage(content=text)
         state = {"messages": [big_msg]}
         r = AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "1"}])
         mw.after_model(state, r, ctx)
@@ -92,7 +91,9 @@ class TestTokenBudgetMiddleware:
     def test_forces_finalize_at_limit(self):
         mw = TokenBudgetMiddleware(max_tokens=50, warn_threshold=0.5)
         ctx = MiddlewareContext()
-        big_msg = HumanMessage(content="x" * 300)  # ~75 tokens, > 50
+        # 10 repeats = ~105 tokens, > 50 max -> forces finalize
+        text = "The quick brown fox jumps over the lazy dog. " * 10
+        big_msg = HumanMessage(content=text)
         state = {"messages": [big_msg]}
         r = AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "1"}])
         mw.after_model(state, r, ctx)
@@ -171,12 +172,10 @@ class TestMiddlewareChain:
         class Mw1(Middleware):
             def before_model(self, state, ctx):
                 calls.append("mw1_before")
-                return None
 
         class Mw2(Middleware):
             def before_model(self, state, ctx):
                 calls.append("mw2_before")
-                return None
 
         chain = MiddlewareChain([Mw1(), Mw2()])
         chain.run_before_model({"messages": []})
@@ -258,6 +257,7 @@ class TestMemory:
         monkeypatch.setenv("CR_MEMORY_DIR", str(tmp_path))
         # Reimport to pick up new dir
         import importlib
+
         import cr_agent.agent.memory as mem
         importlib.reload(mem)
 

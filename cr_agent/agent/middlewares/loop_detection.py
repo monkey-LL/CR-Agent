@@ -1,22 +1,21 @@
-"""LoopDetectionMiddleware — detect and stop infinite tool-calling loops.
+"""LoopDetectionMiddleware —— 检测并阻止无限工具调用循环。
 
-Unhappy path:
-  LLM calls read_file("src/app.py") → sees content → calls read_file("src/app.py") again
-  → sees same content → calls again → ... forever.
-  Or: LLM calls grep("password") → 0 results → calls grep("passwd") → 0 results →
-  calls grep("secret") → ... trying variations endlessly.
+异常场景：
+  LLM 调用 read_file("src/app.py") → 看到内容 → 再次调用 read_file("src/app.py")
+  → 看到相同内容 → 再次调用 → ... 无限循环。
+  或者：LLM 调用 grep("password") → 0 个结果 → 调用 grep("passwd") → 0 个结果 →
+  调用 grep("secret") → ... 不断尝试变体。
 
-Detection (two layers):
-  Layer 1: Exact dedup. Hash tool name + args. If same hash appears N times
-           in the sliding window, it's a loop.
-  Layer 2: Frequency. If a single tool name is called more than M times total,
-           the agent is over-using it.
+检测机制（两层）：
+  第一层：精确去重。对工具名 + 参数进行哈希。如果相同哈希在滑动窗口
+          中出现 N 次，则判定为循环。
+  第二层：频率检测。如果单个工具名被调用的总次数超过 M 次，
+          则判定为过度使用。
 
-Response:
-  warn_threshold: inject a hint "You've called this tool N times. Consider
-                  a different approach."
-  hard_limit: strip tool_calls from the response, force the LLM to produce
-              a final answer. Set forced_finalize=True.
+响应策略：
+  warn_threshold：注入提示 "你已经调用该工具 N 次了，考虑换一种方法。"
+  hard_limit：从响应中移除 tool_calls，强制 LLM 生成最终答案。
+              设置 forced_finalize=True。
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import hashlib
 import logging
 from collections import Counter, deque
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage
 
 from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
@@ -33,12 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 class LoopDetectionMiddleware(Middleware):
-    """Detect infinite loops via tool call dedup and frequency analysis.
+    """通过工具调用去重和频率分析检测无限循环。
 
     Args:
-        warn_threshold: Same exact call repeated this many times → inject warning.
-        hard_limit: Same exact call repeated this many times → force finalize.
-        window_size: Sliding window size for dedup detection.
+        warn_threshold: 相同调用重复达到此次数 -> 注入警告。
+        hard_limit: 相同调用重复达到此次数 -> 强制结束。
+        window_size: 用于去重检测的滑动窗口大小。
     """
 
     def __init__(self, warn_threshold: int = 3, hard_limit: int = 5, window_size: int = 15):
@@ -48,23 +47,28 @@ class LoopDetectionMiddleware(Middleware):
         self._call_hashes: deque = deque(maxlen=window_size)
         self._tool_counts: Counter = Counter()
 
+    def reset(self) -> None:
+        """重置每次调用的状态。由 MiddlewareChain.reset() 调用。"""
+        self._call_hashes.clear()
+        self._tool_counts.clear()
+
     def _hash_call(self, tool_call: dict) -> str:
-        """Hash a tool call for dedup detection."""
+        """对工具调用进行哈希，用于去重检测。"""
         name = tool_call.get("name", "")
         args = str(sorted(tool_call.get("args", {}).items()))
         return hashlib.sha256(f"{name}:{args}".encode()).hexdigest()[:16]
 
-    def after_model(self, state: dict, response, ctx: MiddlewareContext) -> any:
+    def after_model(self, state: dict, response, ctx: MiddlewareContext):
         if not isinstance(response, AIMessage) or not response.tool_calls:
             return None
 
-        # Check each tool call
+        # 检查每个工具调用
         for tc in response.tool_calls:
             call_hash = self._hash_call(tc)
             self._call_hashes.append(call_hash)
             self._tool_counts[tc.get("name", "")] += 1
 
-            # Layer 1: exact dedup
+            # 第一层：精确去重
             dup_count = sum(1 for h in self._call_hashes if h == call_hash)
 
             if dup_count >= self.hard_limit:
@@ -72,7 +76,7 @@ class LoopDetectionMiddleware(Middleware):
                     "Loop detected: tool %s called %d times (hard limit %d). Forcing finalize.",
                     tc.get("name"), dup_count, self.hard_limit,
                 )
-                # Strip tool calls, force finalization
+                # 移除工具调用，强制结束
                 response.tool_calls = []
                 response.content = (
                     "I've detected I'm repeating the same tool calls. "
@@ -82,7 +86,7 @@ class LoopDetectionMiddleware(Middleware):
                 return response
 
             if dup_count >= self.warn_threshold:
-                # Inject a hint without blocking
+                # 注入提示但不阻止调用
                 hint = (
                     f"\n\n[Hint: You've called {tc.get('name')} with the same arguments "
                     f"{dup_count} times. Consider a different approach.]"
@@ -91,9 +95,9 @@ class LoopDetectionMiddleware(Middleware):
                     response.content += hint
                 logger.info("Loop warning: %s called %d times", tc.get("name"), dup_count)
 
-        # Layer 2: frequency check
+        # 第二层：频率检查
         for tool_name, count in self._tool_counts.items():
-            if count > 30:  # Hard frequency limit
+            if count > 30:  # 硬频率上限
                 logger.warning("Frequency limit: %s called %d times total", tool_name, count)
                 if tool_name not in ctx.blocked_tools:
                     ctx.blocked_tools.add(tool_name)
@@ -105,7 +109,7 @@ class LoopDetectionMiddleware(Middleware):
         return None
 
     def before_tool(self, state: dict, tool_call: dict, ctx: MiddlewareContext) -> dict | None:
-        """Block tools that have been frequency-capped."""
+        """阻止因频率超限而被封禁的工具。"""
         tool_name = tool_call.get("name", "")
         if tool_name in ctx.blocked_tools:
             return {

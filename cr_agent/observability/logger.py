@@ -1,24 +1,24 @@
-"""Observability: structured logging, metrics, retry logic.
+"""可观测性：结构化日志、指标、重试逻辑。
 
-Learning focus:
-  - structlog for structured (JSON) logs — searchable, filterable
-  - Retry with exponential backoff — for transient LLM/API failures
-  - Circuit breaker pattern — stop hammering a failing service
-  - Timing metrics — measure each phase of the review pipeline
+学习重点：
+  - structlog 用于结构化（JSON）日志 — 可搜索、可过滤
+  - 带指数退避的重试 — 应对 LLM/API 的瞬时故障
+  - Circuit breaker 模式 — 停止对故障服务的持续请求
+  - 耗时指标 — 衡量审查流水线每个阶段的耗时
 
-Why structured logging?
-  Plain text logs are hard to search. Structured logs (JSON key-value pairs)
-  can be filtered by any field: logger.filter(event="review_complete", repo="foo/bar")
+为什么需要结构化日志？
+  纯文本日志难以搜索。结构化日志（JSON 键值对）
+  可以按任意字段过滤：logger.filter(event="review_complete", repo="foo/bar")
 
-Why retry with backoff?
-  LLM APIs rate-limit (429) and have transient failures (500). Naive retry
-  hammers the server. Exponential backoff (1s, 2s, 4s, ...) gives the server
-  time to recover. Adding jitter (random 0-1s) prevents thundering herd.
+为什么需要带退避的重试？
+  LLM API 会限流（429）并且有瞬时故障（500）。简单的重试
+  会持续请求服务器。指数退避（1s, 2s, 4s, ...）给服务器
+  恢复时间。添加抖动（随机 0-1s）防止惊群效应。
 
-Why circuit breaker?
-  If the LLM API is down, retrying every request wastes time and money.
-  After N consecutive failures, "open the circuit" — fail fast for M seconds
-  before trying again (half-open probe).
+为什么需要 circuit breaker？
+  如果 LLM API 宕机了，每次请求都重试是在浪费时间和金钱。
+  连续 N 次失败后，"打开断路器" — 快速失败 M 秒
+  然后再尝试（半开探测）。
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import wraps
 
 import structlog
@@ -46,7 +46,7 @@ logger = structlog.get_logger()
 
 
 def setup_logging(level: str = "INFO"):
-    """Configure logging level."""
+    """配置日志级别。"""
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -60,15 +60,15 @@ def setup_logging(level: str = "INFO"):
 
 @dataclass
 class CircuitBreaker:
-    """Simple circuit breaker for protecting against cascading failures.
+    """简单的 circuit breaker，用于防止级联故障。
 
-    States:
-      closed: requests flow normally
-      open: requests fail immediately (after threshold consecutive failures)
-      half_open: one probe request allowed (after recovery_timeout)
+    状态：
+      closed（关闭）：请求正常通过
+      open（打开）：请求立即失败（连续失败达到阈值后触发）
+      half_open（半开）：允许一个探测请求通过（超过恢复超时时间后触发）
     """
-    threshold: int = 5  # consecutive failures before opening
-    recovery_timeout: float = 60.0  # seconds before half-open probe
+    threshold: int = 5  # 打开断路器前的连续失败次数
+    recovery_timeout: float = 60.0  # 半开探测前的等待秒数
     _failures: int = 0
     _last_failure_time: float = 0.0
     _state: str = "closed"
@@ -85,7 +85,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             self._on_failure()
             raise
 
@@ -113,11 +113,11 @@ def retry_with_backoff(
     max_delay: float = 30.0,
     exceptions: tuple = (Exception,),
 ):
-    """Decorator: retry a function with exponential backoff + jitter.
+    """装饰器：使用指数退避 + 抖动重试函数。
 
     delay = min(base_delay * 2^attempt + random_jitter, max_delay)
 
-    Usage:
+    用法：
       @retry_with_backoff(max_retries=3, base_delay=2.0)
       def call_llm(prompt): ...
     """
@@ -154,9 +154,9 @@ def retry_with_backoff(
 
 
 def time_phase(phase_name: str):
-    """Decorator: log execution time of a review phase.
+    """装饰器：记录审查阶段的执行时间。
 
-    Usage:
+    用法：
       @time_phase("deterministic_checks")
       def run_checks(diff): ...
     """

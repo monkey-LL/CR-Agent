@@ -1,83 +1,84 @@
-"""Agent tools — the actions the LLM can choose to call.
+"""Agent 工具——LLM 可以选择调用的动作。
 
-Learning focus:
-  - @tool decorator: how LangChain converts a function into a tool schema
-  - Tool docstrings become the LLM's tool description (be clear and specific!)
-  - Return types matter: the LLM sees the return value as a ToolMessage
-  - Error handling: return error info, don't raise (agent can recover)
+学习重点：
+  - @tool 装饰器：LangChain 如何将函数转换为工具 schema
+  - 工具的 docstring 会成为 LLM 看到的工具描述（要清晰、具体！）
+  - 返回类型很重要：LLM 看到的是 ToolMessage 格式的返回值
+  - 错误处理：返回错误信息，不要抛异常（Agent 可以恢复）
 
-Tools are the agent's hands. The LLM decides which tool to call based on:
-  1. The tool's name and docstring (this is what it "sees")
-  2. The current context (what it already knows)
-  3. What it needs to accomplish next
+工具是 Agent 的"手"。LLM 根据以下信息决定调用哪个工具：
+  1. 工具的名称和 docstring（这是它"看到"的内容）
+  2. 当前上下文（它已经知道什么）
+  3. 它接下来需要完成什么
 
-Key insight: The LLM doesn't "run code" — it emits a structured request to
-call a tool, and our code executes it and returns the result.
+关键理解：LLM 不"执行代码"——它发出一个结构化的请求来
+调用工具，我们的代码执行它并返回结果。
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 from langchain_core.tools import tool
 
-from cr_agent.core.models import Finding, Severity, Confidence
-
 
 @tool
 def run_lint(command: str, cwd: str = ".") -> str:
-    """Run a lint or type-check command and return the output.
+    """运行 lint 或 type-check 命令并返回输出。
 
-    Use this to run project linters like:
-    - Python: "ruff check ." or "mypy ."
-    - JavaScript: "npx eslint ." or "npx tsc --noEmit"
+    可用于运行项目的 linter，如：
+    - Python: "ruff check ." 或 "mypy ."
+    - JavaScript: "npx eslint ." 或 "npx tsc --noEmit"
+
+    命令在沙箱中执行，有命令白名单限制。
+    Shell 元字符（;, |, &&, $(), 反引号）会被拒绝。
 
     Args:
-        command: The shell command to execute (e.g. "ruff check . --output-format=json").
-        cwd: Working directory for the command (defaults to current directory).
+        command: 要执行的 lint 命令（如 "ruff check . --output-format=json"）。
+        cwd: 命令的工作目录（默认为当前目录）。
     """
+    from cr_agent.sandbox.executor import SandboxConfig, run_command
+
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=cwd,
-        )
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            return f"Lint passed (exit 0):\n{output[:2000]}"
-        else:
-            return f"Lint failed (exit {result.returncode}):\n{output[:2000]}"
-    except subprocess.TimeoutExpired:
-        return "Lint timed out after 30 seconds. Skipped."
-    except FileNotFoundError:
-        return f"Command not found: {command}. Skipped."
+        exit_code, output = run_command(command, cwd=cwd, config=SandboxConfig())
     except Exception as e:
         return f"Lint error: {type(e).__name__}: {e}. Skipped."
+
+    if exit_code == -1:
+        return f"Lint skipped: {output}"
+
+    if exit_code == 0:
+        return f"Lint passed (exit 0):\n{output[:2000]}"
+    else:
+        return f"Lint failed (exit {exit_code}):\n{output[:2000]}"
 
 
 @tool
 def read_file(path: str, max_lines: int = 200) -> str:
-    """Read a file's content for full context beyond what the diff shows.
+    """读取文件内容以获取 diff 之外的完整上下文。
 
-    Use this ONLY when the diff context is insufficient to understand a change.
-    Do NOT read every changed file.
+    仅在 diff 上下文不足以理解变更时使用。
+    不要读取每个文件。
+
+    路径会经过路径遍历攻击校验。
 
     Args:
-        path: Path to the file to read.
-        max_lines: Maximum lines to read (defaults to 200 to avoid token explosion).
+        path: 要读取的文件路径（相对于仓库根目录）。
+        max_lines: 最大读取行数（默认 200，防止 token 爆炸）。
     """
+    from cr_agent.security.sanitizer import validate_path
+
     try:
-        p = Path(path)
+        safe_path = validate_path(path)
+        p = Path(safe_path)
         if not p.exists():
             return f"File not found: {path}"
         content = p.read_text(errors="replace")
         lines = content.split("\n")[:max_lines]
         return "\n".join(lines)
+    except ValueError as e:
+        return f"Path validation error: {e}"
     except Exception as e:
         return f"Error reading {path}: {type(e).__name__}: {e}"
 
@@ -91,22 +92,22 @@ def generate_report(
     lines_added: int = 0,
     lines_removed: int = 0,
 ) -> str:
-    """Generate the final code review report.
+    """生成最终的代码审查报告。
 
-    Call this when you have completed your analysis.
+    当你完成分析后调用此工具。
 
     Args:
-        verdict: One of "approve", "request_changes", "block".
-        summary: 1-3 sentence overview of the review.
-        findings: JSON array of finding objects. Each finding has:
+        verdict: 审查结论，取值为 "approve"、"request_changes" 或 "block"。
+        summary: 1-3 句话的审查概述。
+        findings: finding 对象的 JSON 数组。每个 finding 包含：
             rule_id (str), severity (blocker/major/minor/info), file (str),
-            line (int), message (str), suggestion (str), confidence (high/medium/low).
-        files_reviewed: Number of files reviewed.
-        lines_added: Lines added in the diff.
-        lines_removed: Lines removed in the diff.
+            line (int), message (str), suggestion (str), confidence (high/medium/low)。
+        files_reviewed: 审查的文件数量。
+        lines_added: diff 中新增的行数。
+        lines_removed: diff 中删除的行数。
     """
-    # The actual report construction happens in the graph node that processes
-    # this tool call. Here we just validate and pass through.
+    # 实际的报告构建在处理此工具调用的 graph 节点中进行。
+    # 这里只是校验并透传。
     try:
         parsed_findings = json.loads(findings) if isinstance(findings, str) else findings
     except json.JSONDecodeError:
@@ -125,5 +126,5 @@ def generate_report(
     return json.dumps(report, ensure_ascii=False)
 
 
-# Tool list exposed to the LLM
+# 暴露给 LLM 的工具列表
 ALL_TOOLS = [run_lint, read_file, generate_report]

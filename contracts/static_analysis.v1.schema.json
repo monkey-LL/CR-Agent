@@ -1,5 +1,5 @@
 {
-  "description": "Result of a single static analysis tool (lint, type-check).",
+  "description": "单次静态分析工具（lint、type-check）的运行结果。",
   "properties": {
     "tool": {
       "title": "Tool",

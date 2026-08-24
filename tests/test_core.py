@@ -4,14 +4,18 @@ Run: python -m pytest tests/test_core.py -v
 """
 
 import pytest
-from cr_agent.core.diff_parser import parse_diff, compute_metrics, DiffHunk
-from cr_agent.core.rules_engine import run_deterministic_checks, DETERMINISTIC_RULES
-from cr_agent.core.models import (
-    Finding, Severity, Verdict, Confidence,
-    ReviewReport, DiffMetrics, determine_verdict,
-)
-from cr_agent.security.sanitizer import sanitize_input, mask_secrets, validate_path
 
+from cr_agent.core.diff_parser import compute_metrics, parse_diff
+from cr_agent.core.models import (
+    DiffMetrics,
+    Finding,
+    ReviewReport,
+    Severity,
+    Verdict,
+    determine_verdict,
+)
+from cr_agent.core.rules_engine import DETERMINISTIC_RULES, run_deterministic_checks
+from cr_agent.security.sanitizer import mask_secrets, sanitize_input, validate_path
 
 SAMPLE_DIFF = """\
 --- a/src/auth/login.py

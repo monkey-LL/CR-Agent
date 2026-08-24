@@ -1,24 +1,24 @@
-"""CLI entry point — review a PR from the command line.
+"""CLI 入口 — 从命令行审查 PR。
 
-Learning focus:
-  - How to wire everything together: diff → rules → LLM → report
-  - Local testing without a webhook server
-  - Environment variable configuration
+学习重点:
+  - 如何将各环节串联起来: diff → 规则 → LLM → 报告
+  - 无需 webhook 服务器即可进行本地测试
+  - 环境变量配置
 
-Usage:
-  # Review a PR by number
+用法:
+  # 通过 PR 编号审查
   python -m cr_agent.cli --repo owner/repo --pr 42
 
-  # Review from a diff file
+  # 从 diff 文件审查
   python -m cr_agent.cli --diff-file path/to/diff.patch
 
-  # Review from stdin
+  # 从 stdin 审查
   git diff main...HEAD | python -m cr_agent.cli --diff-stdin
 
-Environment:
-  OPENAI_API_KEY    Required for LLM calls
-  GH_TOKEN          Optional, for GitHub API access
-  CR_MODEL          Optional, model name (default: DeepSeek-V4-Flash)
+环境变量:
+  OPENAI_API_KEY    LLM 调用所需（必填）
+  GH_TOKEN          可选，用于 GitHub API 访问
+  CR_MODEL          可选，模型名称（默认: DeepSeek-V4-Flash）
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import os
 import sys
 import time
 
-from cr_agent.observability.logger import logger, setup_logging
+from cr_agent.observability.logger import setup_logging
 
 
 def main():
@@ -45,7 +45,7 @@ def main():
 
     setup_logging("DEBUG" if args.verbose else "INFO")
 
-    # Get diff
+    # 获取 diff
     if args.diff_file:
         with open(args.diff_file) as f:
             diff = f.read()
@@ -73,10 +73,10 @@ def main():
     start_time = time.time()
 
     if args.no_llm:
-        # Deterministic-only mode: no LLM, just regex rules
-        from cr_agent.core.diff_parser import parse_diff, compute_metrics
+        # 仅确定性模式: 不使用 LLM，仅使用正则规则
+        from cr_agent.core.diff_parser import compute_metrics, parse_diff
+        from cr_agent.core.models import DiffMetrics, ReviewReport, determine_verdict
         from cr_agent.core.rules_engine import run_deterministic_checks
-        from cr_agent.core.models import ReviewReport, determine_verdict, DiffMetrics
 
         hunks = parse_diff(diff)
         findings = run_deterministic_checks(hunks)
@@ -90,16 +90,16 @@ def main():
             metrics=DiffMetrics(files_changed=files_changed, lines_added=added, lines_removed=removed),
         )
     else:
-        # Full LLM review
+        # 完整 LLM 审查
         from cr_agent.agent.graph import build_graph
         graph = build_graph(model_name=args.model)
-        result = graph.invoke({"diff": diff, "pr_info": pr_info})
+        result = graph.invoke({"diff": diff, "pr_info": pr_info, "memory_context": ""})
         from cr_agent.core.models import ReviewReport
         report = ReviewReport(**result["report"])
 
     elapsed = time.time() - start_time
 
-    # Output
+    # 输出
     print("\n" + "=" * 60)
     print(report.to_markdown())
     print("=" * 60)
@@ -107,7 +107,7 @@ def main():
     print(f"Verdict: {report.verdict.value}")
     print(f"Findings: {len(report.findings)}")
 
-    # Post to GitHub if requested
+    # 如果请求则发布到 GitHub
     if args.post_comment and args.repo and args.pr:
         token = os.environ.get("GH_TOKEN")
         success = post_pr_comment(args.pr, args.repo, report.to_markdown(), token)

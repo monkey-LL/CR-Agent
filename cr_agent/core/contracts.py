@@ -1,13 +1,13 @@
-"""Export JSON Schema contracts for cross-component data validation.
+"""导出 JSON Schema 契约，用于跨组件数据校验。
 
-Why contracts?
-  - The review_code tool outputs findings. The report generator reads findings.
-  - If the tool changes its output format, the report generator breaks.
-  - A JSON Schema contract makes the format explicit and verifiable.
-  - Production: use in CI to validate that tool output matches schema.
+为什么需要契约？
+  - review_code 工具输出 findings，报告生成器读取 findings。
+  - 如果工具输出格式变了，报告生成器就会出错。
+  - JSON Schema 契约让格式显式化、可验证。
+  - 生产环境：在 CI 中校验工具输出是否符合 schema。
 
-Usage:
-    python -m cr_agent.core.contracts  # Export all schemas to contracts/
+用法：
+    python -m cr_agent.core.contracts  # 导出所有 schema 到 contracts/
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cr_agent.core.models import Finding, ReviewReport, DiffMetrics, StaticAnalysisResult
+from cr_agent.core.models import DiffMetrics, Finding, ReviewReport, StaticAnalysisResult
 
 CONTRACTS_DIR = Path(__file__).parent.parent.parent / "contracts"
 
 
 def export_schemas():
-    """Export all Pydantic models as JSON Schema files."""
+    """将所有 Pydantic 模型导出为 JSON Schema 文件。"""
     CONTRACTS_DIR.mkdir(parents=True, exist_ok=True)
 
     schemas = {

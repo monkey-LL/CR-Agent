@@ -1,17 +1,17 @@
-"""ToolErrorHandlingMiddleware — graceful degradation when tools fail.
+"""ToolErrorHandlingMiddleware —— 工具执行失败时的优雅降级处理。
 
-Unhappy path:
-  LLM says "run ruff check" → ruff not installed → subprocess raises FileNotFoundError
-  Without middleware: exception propagates → Agent crashes → review fails
-  With middleware: error caught → return ToolMessage(error) → Agent continues with
-                   what it has → report says "Static Analysis: skipped (linter unavailable)"
+异常场景：
+  LLM 说 "运行 ruff check" → ruff 未安装 → subprocess 抛出 FileNotFoundError
+  无 middleware：异常向上传播 → Agent 崩溃 → 审查失败
+  有 middleware：捕获错误 → 返回 ToolMessage(error) → Agent 用已有信息继续工作
+                → 报告中写 "静态分析：已跳过（linter 不可用）"
 
-Production principle: fail-open for non-critical tools, fail-closed for critical.
-  - lint failing → fail-open (skip, continue review)
-  - bash executing PR code → fail-closed (must never happen)
-  - generate_report failing → fail-closed (can't produce output)
+生产环境原则：非关键工具采用失败放行策略，关键工具采用失败阻断策略。
+  - lint 失败 → 失败放行（跳过，继续审查）
+  - bash 执行 PR 代码 → 失败阻断（绝不允许发生）
+  - generate_report 失败 → 失败阻断（无法生成输出）
 
-The error message includes a recovery hint so the LLM knows what to do next:
+错误信息中包含恢复提示，让 LLM 知道下一步该怎么做：
   "Lint failed: command not found. Continue with available context, or try a different tool."
 """
 
@@ -24,28 +24,28 @@ from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
-_RECOVERY_HINT = "Continue with available context, or choose an alternative tool."
+_RECOVERY_HINT = "Continue with available context, or choose an alternative tool."  # 恢复提示：用现有上下文继续，或选择替代工具
 
 
 class ToolErrorHandlingMiddleware(Middleware):
-    """Catch tool execution errors and convert them to ToolMessages.
+    """捕获工具执行错误并转换为 ToolMessage。
 
-    This middleware wraps tool execution. If the tool raises, we:
-    1. Log the error with full traceback
-    2. Return a ToolMessage with status="error" and a truncated error message
-    3. Include a recovery hint so the LLM knows to try something else
+    此 middleware 包装工具执行过程。如果工具抛出异常，我们会：
+    1. 记录完整 traceback 到日志
+    2. 返回一个 status="error" 的 ToolMessage，包含截断后的错误信息
+    3. 附带恢复提示，让 LLM 知道可以尝试其他方案
 
-    The Agent continues running — it just knows that tool didn't work.
+    Agent 会继续运行 —— 只是知道该工具不可用而已。
     """
 
     def __init__(self, max_error_length: int = 500):
         self.max_error_length = max_error_length
 
     def after_tool(self, state: dict, tool_result: str, ctx: MiddlewareContext) -> str | None:
-        """Check if tool result contains an error and ensure it's actionable."""
-        # Tool results that indicate errors often start with "Error:" or contain "Traceback"
+        """检查工具结果是否包含错误，并确保错误信息可操作。"""
+        # 包含错误的工具结果通常以 "Error:" 开头或包含 "Traceback"
         if "Traceback" in tool_result:
-            # Truncate long tracebacks — LLM doesn't need the full stack
+            # 截断过长的 traceback —— LLM 不需要完整的调用栈
             lines = tool_result.split("\n")
             if len(lines) > 10:
                 tool_result = "\n".join(lines[:5]) + "\n...[truncated]...\n" + lines[-1]
@@ -55,9 +55,9 @@ class ToolErrorHandlingMiddleware(Middleware):
 
 
 class ToolErrorHandler:
-    """Context manager for wrapping tool execution with error handling.
+    """用于包装工具执行并处理错误的上下文管理器。
 
-    Usage in graph.py:
+    在 graph.py 中的用法：
         with ToolErrorHandler() as handler:
             result = tool.invoke(args)
         if handler.error:
@@ -82,7 +82,7 @@ class ToolErrorHandler:
                 str(exc_val)[:200],
             )
             logger.debug("Traceback: %s", "".join(traceback.format_tb(exc_tb)))
-            return True  # Suppress the exception
+            return True  # 抑制异常，不再向上传播
         return False
 
     @property

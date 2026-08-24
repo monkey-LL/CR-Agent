@@ -1,9 +1,9 @@
-"""Data models for code review findings, reports, and verdicts.
+"""代码审查数据模型——发现、报告、结论。
 
-Learning focus:
-  - Pydantic v2 models for structured data
-  - Severity hierarchy and verdict rules
-  - Schema versioning for contract stability
+学习重点：
+  - Pydantic v2 模型用于结构化数据
+  - 严重度层级与审查结论的映射规则
+  - Schema 版本化，保证契约稳定性
 """
 
 from __future__ import annotations
@@ -15,16 +15,16 @@ from pydantic import BaseModel, Field
 
 
 class Severity(str, Enum):
-    """Finding severity levels, ordered by impact."""
+    """发现严重度级别，按影响从高到低排列。"""
 
-    BLOCKER = "blocker"  # Must fix: security vuln, data loss, crash
-    MAJOR = "major"      # Should fix: logic error, missing error handling
-    MINOR = "minor"      # Optional: style, naming, maintainability
-    INFO = "info"        # Observation, no action needed
+    BLOCKER = "blocker"  # 必须修复：安全漏洞、数据丢失、崩溃
+    MAJOR = "major"      # 应该修复：逻辑错误、缺失异常处理
+    MINOR = "minor"      # 可选修复：风格、命名、可维护性
+    INFO = "info"        # 观察记录，无需操作
 
 
 class Verdict(str, Enum):
-    """Overall review conclusion."""
+    """整体审查结论。"""
 
     APPROVE = "approve"
     REQUEST_CHANGES = "request_changes"
@@ -32,7 +32,7 @@ class Verdict(str, Enum):
 
 
 class Confidence(str, Enum):
-    """How confident the reviewer is in this finding."""
+    """审查者对此发现的置信度。"""
 
     HIGH = "high"
     MEDIUM = "medium"
@@ -40,7 +40,7 @@ class Confidence(str, Enum):
 
 
 class Finding(BaseModel):
-    """A single code review finding."""
+    """单条代码审查发现。"""
 
     rule_id: str
     severity: Severity
@@ -52,7 +52,7 @@ class Finding(BaseModel):
     source: Literal["deterministic", "llm"] = "deterministic"
 
     def markdown(self) -> str:
-        """Render as markdown for PR comment."""
+        """渲染为 markdown 格式，用于 PR 评论。"""
         return (
             f"#### [{self.severity.value}] {self.file or 'unknown'}:{self.line or '?'}\n"
             f"**Issue**: {self.message}\n"
@@ -62,7 +62,7 @@ class Finding(BaseModel):
 
 
 class DiffMetrics(BaseModel):
-    """Statistics about the reviewed diff."""
+    """diff 统计信息。"""
 
     files_changed: int = 0
     lines_added: int = 0
@@ -70,7 +70,7 @@ class DiffMetrics(BaseModel):
 
 
 class StaticAnalysisResult(BaseModel):
-    """Result of a single static analysis tool (lint, type-check)."""
+    """单次静态分析工具（lint、type-check）的运行结果。"""
 
     tool: str
     status: Literal["pass", "fail", "skipped"] = "skipped"
@@ -79,7 +79,7 @@ class StaticAnalysisResult(BaseModel):
 
 
 class ReviewReport(BaseModel):
-    """Complete review report posted as a PR comment."""
+    """完整审查报告，会作为 PR 评论发布。"""
 
     schema_version: str = "cr-agent.report.v1"
     verdict: Verdict
@@ -89,7 +89,7 @@ class ReviewReport(BaseModel):
     metrics: DiffMetrics = Field(default_factory=DiffMetrics)
 
     def to_markdown(self) -> str:
-        """Render the full report as markdown."""
+        """将完整报告渲染为 markdown。"""
         lines = ["## Code Review Report\n", f"**Verdict**: {self.verdict.value}\n"]
         lines.append(f"### Summary\n{self.summary}\n")
 
@@ -116,9 +116,9 @@ class ReviewReport(BaseModel):
 
 
 def determine_verdict(findings: list[Finding]) -> Verdict:
-    """Determine the review verdict from findings.
+    """根据发现列表判定审查结论。
 
-    Learning focus: this is the decision logic that maps findings to actions.
+    学习重点：这是将发现映射到行动的决策逻辑。
     """
     has_blocker = any(f.severity == Severity.BLOCKER for f in findings)
     has_major = any(f.severity == Severity.MAJOR for f in findings)
