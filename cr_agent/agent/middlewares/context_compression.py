@@ -5,28 +5,27 @@
   5 次迭代后，上下文达到 80K token。LLM 无法容纳 diff + 上下文。
   最终：上下文窗口超出 -> API 报错 -> 审查失败。
 
+优化（参考业界做法）：
+  C1: 触发条件从消息条数改为 token 数（复用 tiktoken），避免"20 条短消息
+      不该压却压了，20 条长消息早该压却没压"的问题。
+  C2: 结构化摘要按工具类型分别提取关键信息——read_file 提取文件路径和
+      行数，run_lint 提取错误数量和严重错误摘要，AIMessage 提取包含
+      findings 的 JSON 片段。不再只取第一行前 100 字符。
+  C3: 标记含 LLM findings 的 AIMessage 为不可压缩，避免审查结论被丢失。
+
 压缩机制：
-  当消息数量超过 max_messages 时，我们会：
-  1. 保留最近的 `keep_recent` 条消息（当前上下文）
-  2. 用摘要替换较早的消息
-  3. 重要：保留 system prompt 和初始用户消息（审查上下文）
-
-压缩级别：
-  - 使用 LLM（生产环境）：用轻量级模型生成旧消息的真实摘要，
-    保留关键发现和上下文。
-  - 不使用 LLM（回退方案）：从旧消息中提取工具名和关键信息，
-    生成结构化摘要。比简单截断效果更好。
-
-不压缩的内容（重要信息保留）：
-  - System prompt（Agent 身份和规则）
-  - 第一条用户消息（diff + PR 信息）
-  - 确定性发现（已在 state 中，不在 messages 中）
-  - 最近 N 条消息（活跃工作上下文）
+  当 token 数超过 max_tokens 时：
+  1. 保留 system prompt + 首条用户消息（含 diff）
+  2. 保留含 findings 的 AIMessage（不可压缩）
+  3. 保留最近 keep_recent 条消息（当前工作上下文）
+  4. 其余旧消息生成结构化摘要替换
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -34,78 +33,145 @@ from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
+_CHARS_PER_TOKEN = 4
+
 
 class ContextCompressionMiddleware(Middleware):
-    """当对话过长时压缩旧消息。
+    """当对话 token 数超过阈值时压缩旧消息。
 
     Args:
-        max_messages: 消息数量超过此值时触发压缩。
+        max_tokens: token 数超过此值时触发压缩。
         keep_recent: 需要原样保留的最近消息条数。
         summary_llm: 可选的 LLM，用于生成旧消息的真实摘要。
-                     如果为 None，则使用结构化提取（工具名 + 关键信息）。
+                     如果为 None，则使用结构化提取。
     """
 
     def __init__(
         self,
-        max_messages: int = 20,
+        max_tokens: int = 50000,
         keep_recent: int = 8,
         summary_llm=None,
     ):
-        self.max_messages = max_messages
+        self.max_tokens = max_tokens
         self.keep_recent = keep_recent
         self._summary_llm = summary_llm
+        self._encoder = None
+        try:
+            import tiktoken
+            self._encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            logger.debug("tiktoken not available, using character-based estimation for compression")
 
-    def _extract_tool_info(self, messages: list) -> str:
-        """从旧消息中提取结构化信息（无 LLM 时的回退方案）。"""
-        tool_names = set()
-        tool_errors = []
-        key_outputs = []
-
-        for msg in messages:
-            # 从 AIMessage 中提取工具调用名
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_names.add(tc.get("name", "unknown"))
-                    # 提取关键参数（文件路径等）
-                    args = tc.get("args", {})
-                    if "path" in args:
-                        key_outputs.append(f"read: {args['path']}")
-                    elif "command" in args:
-                        key_outputs.append(f"ran: {args['command'][:50]}")
-
-            # 提取工具结果
-            if isinstance(msg, ToolMessage):
+    def _count_tokens(self, messages: list) -> int:
+        """估算 messages 列表的 token 数。"""
+        if self._encoder is not None:
+            total = 0
+            for msg in messages:
                 content = getattr(msg, "content", "")
                 if isinstance(content, str):
-                    # 捕获每个工具输出的第一行作为关键发现
-                    first_line = content.split("\n")[0][:100]
-                    if first_line and not first_line.startswith("Error"):
-                        key_outputs.append(first_line)
-                    # 记录错误
-                    if "Error" in content or "Traceback" in content:
-                        tool_errors.append(content[:80])
+                    total += len(self._encoder.encode(content))
+                total += 4  # role 开销
+            return total
+        else:
+            total_chars = sum(
+                len(getattr(msg, "content", ""))
+                for msg in messages
+                if isinstance(getattr(msg, "content", ""), str)
+            )
+            return total_chars // _CHARS_PER_TOKEN
 
-            # 提取 LLM 文本内容
+    def _contains_findings(self, msg) -> bool:
+        """检查 AIMessage 的 content 是否包含 LLM 审查结果 JSON。"""
+        if not isinstance(msg, AIMessage):
+            return False
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            return False
+        # D1 后 LLM 在 content 里直接输出 JSON，检查是否含 findings 字段
+        return '"findings"' in content and '"severity"' in content
+
+    def _extract_tool_info(self, messages: list) -> str:
+        """从旧消息中按工具类型分别提取结构化信息。"""
+        files_read: list[str] = []
+        lint_results: list[str] = []
+        llm_analysis: list[str] = []
+        errors: list[str] = []
+
+        for msg in messages:
+            # 从 AIMessage 中提取工具调用
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    name = tc.get("name", "")
+                    args = tc.get("args", {})
+                    if name == "read_file":
+                        path = args.get("path", "?")
+                        files_read.append(path)
+                    elif name == "run_lint":
+                        cmd = args.get("command", "?")
+                        lint_results.append(f"ran: {cmd[:80]}")
+
+            # 从 ToolMessage 中按内容特征提取关键信息
+            if isinstance(msg, ToolMessage):
+                content = getattr(msg, "content", "")
+                if not isinstance(content, str):
+                    continue
+                if "Error" in content or "Traceback" in content:
+                    # 提取错误类型和位置
+                    error_lines = [l for l in content.split("\n") if "Error" in l or "error" in l.lower()][:3]
+                    errors.extend(error_lines)
+                elif "Lint passed" in content:
+                    lint_results.append("lint passed")
+                elif "Lint failed" in content:
+                    # 提取 lint 错误摘要（前 3 条错误）
+                    error_lines = [l.strip() for l in content.split("\n")
+                                   if l.strip() and not l.startswith("Lint failed")][:3]
+                    lint_results.extend(error_lines)
+                elif "File not found" in content:
+                    pass  # 跳过无效读取
+                else:
+                    # read_file 的返回——提取文件名和行数
+                    line_count = content.count("\n") + 1
+                    first_line = content.split("\n")[0][:60] if content else ""
+                    if first_line:
+                        files_read.append(f"({line_count} lines)")
+
+            # 提取 LLM 分析文本（非工具调用的 AIMessage）
             if isinstance(msg, AIMessage):
                 content = getattr(msg, "content", "")
                 if isinstance(content, str) and len(content) > 50:
-                    # 捕获 LLM 的分析片段
-                    key_outputs.append(content[:100])
+                    # 如果包含 findings JSON，提取 findings 数量
+                    if self._contains_findings(msg):
+                        try:
+                            # 尝试提取 JSON 并统计 findings
+                            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                            if json_match:
+                                data = json.loads(json_match.group())
+                                finding_count = len(data.get("findings", []))
+                                llm_analysis.append(f"produced {finding_count} findings")
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+                    else:
+                        # 普通分析文本，取前 150 字符
+                        llm_analysis.append(content[:150])
 
         parts = []
-        if tool_names:
-            parts.append(f"Tools used: {', '.join(sorted(tool_names))}")
-        if key_outputs:
-            parts.append(f"Key info: {' | '.join(key_outputs[:5])}")
-        if tool_errors:
-            parts.append(f"Errors encountered: {len(tool_errors)}")
+        if files_read:
+            # 去重并保持顺序
+            seen = set()
+            unique_files = [f for f in files_read if not (f in seen or seen.add(f))]
+            parts.append(f"Files read: {', '.join(unique_files[:10])}")
+        if lint_results:
+            parts.append(f"Lint results: {' | '.join(lint_results[:5])}")
+        if llm_analysis:
+            parts.append(f"LLM analysis: {' | '.join(llm_analysis[:3])}")
+        if errors:
+            parts.append(f"Errors: {len(errors)} encountered")
 
         return "; ".join(parts) if parts else "No extractable info"
 
     def _summarize_with_llm(self, messages: list) -> str:
         """使用 LLM 生成旧消息的正式摘要。"""
         try:
-            # 构建旧消息的紧凑表示
             msg_text = []
             for msg in messages:
                 role = "Unknown"
@@ -134,25 +200,30 @@ class ContextCompressionMiddleware(Middleware):
         except Exception as e:
             logger.warning("LLM summarization failed, falling back to extraction: %s", e)
 
-        # 回退到提取方式
         return self._extract_tool_info(messages)
 
     def before_model(self, state: dict, ctx: MiddlewareContext) -> dict | None:
         messages = state.get("messages", [])
-        if len(messages) <= self.max_messages:
+
+        # C1: 按 token 数触发，而非消息条数
+        current_tokens = self._count_tokens(messages)
+        if current_tokens <= self.max_tokens:
             return None
 
-        # 识别受保护的消息（system prompt + 初始用户消息）
+        # 分类消息：受保护的 / 含 findings 的 / 可压缩的
         protected: list = []
         compressible: list = []
+        first_user_protected = False
 
         for msg in messages:
-            if isinstance(msg, (SystemMessage,)):
+            if isinstance(msg, SystemMessage):
                 protected.append(msg)
-            elif isinstance(msg, HumanMessage) and not compressible and not any(
-                isinstance(m, HumanMessage) for m in protected
-            ):
+            elif isinstance(msg, HumanMessage) and not first_user_protected:
                 # 第一条用户消息 = 包含 diff 的审查请求 —— 保护它
+                protected.append(msg)
+                first_user_protected = True
+            elif isinstance(msg, AIMessage) and self._contains_findings(msg):
+                # C3: 含 LLM findings 的消息不可压缩
                 protected.append(msg)
             else:
                 compressible.append(msg)
@@ -180,9 +251,12 @@ class ContextCompressionMiddleware(Middleware):
         )
 
         new_messages = protected + [summary_msg] + recent
+        new_tokens = self._count_tokens(new_messages)
         logger.info(
-            "Context compressed: %d -> %d messages (kept %d recent, summarized %d old, llm=%s)",
-            len(messages), len(new_messages), len(recent), len(old),
+            "Context compressed: %d tokens -> %d tokens, %d messages -> %d messages "
+            "(protected=%d, kept_recent=%d, summarized=%d, llm=%s)",
+            current_tokens, new_tokens, len(messages), len(new_messages),
+            len(protected), len(recent), len(old),
             self._summary_llm is not None,
         )
 

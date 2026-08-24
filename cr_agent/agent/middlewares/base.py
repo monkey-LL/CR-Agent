@@ -176,7 +176,7 @@ def build_default_chain() -> MiddlewareChain:
 
     chain = MiddlewareChain()
     chain.add(InputSanitizationMiddleware())
-    chain.add(ContextCompressionMiddleware(max_messages=20, keep_recent=8))
+    chain.add(ContextCompressionMiddleware(max_tokens=50000, keep_recent=8))
     chain.add(LoopDetectionMiddleware(warn_threshold=3, hard_limit=5, window_size=15))
     chain.add(ToolErrorHandlingMiddleware())
     chain.add(ToolOutputBudgetMiddleware(max_chars=20000))

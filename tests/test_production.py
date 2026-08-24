@@ -135,12 +135,13 @@ class TestToolErrorHandler:
 
 
 class TestContextCompressionMiddleware:
-    def test_compresses_when_too_many_messages(self):
-        mw = ContextCompressionMiddleware(max_messages=10, keep_recent=3)
+    def test_compresses_when_too_many_tokens(self):
+        # 用很长的内容确保超过 max_tokens 阈值
+        mw = ContextCompressionMiddleware(max_tokens=200, keep_recent=3)
         messages = [SystemMessage(content="system")]
         messages.append(HumanMessage(content="initial diff"))
         for i in range(15):
-            messages.append(ToolMessage(content=f"result {i}", tool_call_id=str(i)))
+            messages.append(ToolMessage(content=f"result {i} " * 50, tool_call_id=str(i)))
 
         state = {"messages": messages}
         result = mw.before_model(state, MiddlewareContext())
@@ -153,7 +154,7 @@ class TestContextCompressionMiddleware:
         assert any("compressed" in m.content for m in result["messages"] if isinstance(m, SystemMessage))
 
     def test_no_compression_when_under_limit(self):
-        mw = ContextCompressionMiddleware(max_messages=20, keep_recent=5)
+        mw = ContextCompressionMiddleware(max_tokens=50000, keep_recent=5)
         state = {"messages": [SystemMessage(content="s"), HumanMessage(content="h")]}
         result = mw.before_model(state, MiddlewareContext())
         assert result is None
