@@ -474,7 +474,7 @@ LLM 产生 tool_calls
 
 ```bash
 # LLM
-OPENAI_API_KEY=W1iMeZ0U13hrNVZ0FONy0vN39r1CwXFl
+OPENAI_API_KEY=your-api-key-here
 OPENAI_BASE_URL=https://antchat.alipay.com/v1
 CR_MODEL=DeepSeek-V4-Flash
 
