@@ -1,21 +1,14 @@
 """审查记忆 —— 从过往审查中学习以改进未来审查。
 
-无记忆场景（不愉快路径）：
-  每次 PR 审查都从零开始。Agent 不知道：
-  - 这个仓库的认证模块总是存在 SQL 注入问题
-  - 团队的约定是使用 logging，而非 print
-  - 上次对该 PR 的审查已经发现了 3 个问题
+学习重点：
+  - SQLite 作为轻量持久化：零配置、单文件、够快
+  - 记忆上下文注入 LLM prompt：让 LLM 知道仓库的历史问题模式
+  - 确认偏误防护：只注入 blocker+major 级别的历史 pattern，避免 minor/info 干扰
 
-有记忆场景：
-  在审查 PR #42 之前，加载历史记录：
-  - "该仓库过往审查发现：SQL 注入 (3次)，硬编码密钥 (2次)"
-  - "PR #42 的上次审查：3 个发现 (1 个阻塞级，2 个严重级)"
-  这些上下文会注入到 LLM 提示词中，提升聚焦度和一致性。
-
-存储方式：
-  - 每个仓库一个 JSON 文件（默认，用于开发）：{repo}_{pr_number}.json
-  - SQLite（生产环境）：结构化存储，支持快速查询
-  - 向量数据库（未来）：用于相似代码模式的语义召回
+数据流：
+  save_review_memory → SQLite reviews 表
+  build_memory_context → 查询 SQLite → 拼接 prompt 上下文
+  cleanup_old_reviews → 定期清理过期记录（由调用方触发）
 """
 
 from __future__ import annotations
@@ -26,13 +19,16 @@ import os
 import sqlite3
 import threading
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 MEMORY_DIR = Path(os.environ.get("CR_MEMORY_DIR", ".cr_agent_memory"))
 MEMORY_DB = Path(os.environ.get("CR_MEMORY_DB", str(MEMORY_DIR / "memory.db")))
+
+# 默认保留天数，超过此天数的审查记录会被 cleanup_old_reviews 清理
+DEFAULT_RETENTION_DAYS = 90
 
 _db_lock = threading.Lock()
 
@@ -60,133 +56,81 @@ def _get_db() -> sqlite3.Connection:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_reviews_repo_pr ON reviews(repo, pr_number)
     """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON reviews(reviewed_at)
+    """)
     conn.commit()
     return conn
 
 
 def save_review_memory(repo: str, pr_number: int, findings: list[dict], verdict: str, trace_id: str = ""):
-    """将审查结果保存到记忆中，供后续参考。
+    """将审查结果保存到 SQLite，供后续参考。
 
-    同时存储到 JSON（用于向后兼容）和 SQLite（用于快速查询）。
+    finding_types 和 severities 保持对应关系，不去重。
     """
-    # 保存到 SQLite
-    try:
-        # 保持 finding_types 和 severities 的对应关系，不去重
-        finding_types = [f.get("rule_id", "unknown") for f in findings]
-        severities = [f.get("severity", "info") for f in findings]
+    finding_types = [f.get("rule_id", "unknown") for f in findings]
+    severities = [f.get("severity", "info") for f in findings]
 
-        with _db_lock:
-            conn = _get_db()
-            try:
-                conn.execute(
-                    """INSERT INTO reviews (repo, pr_number, verdict, findings_count,
-                       finding_types, severities, reviewed_at, trace_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        repo, pr_number, verdict, len(findings),
-                        json.dumps(finding_types), json.dumps(severities),
-                        datetime.now().isoformat(), trace_id,
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-        logger.info(
-            "Memory saved (SQLite): %s/%d (%d findings, verdict=%s)",
-            repo, pr_number, len(findings), verdict,
-        )
-    except Exception as e:
-        logger.warning("SQLite memory save failed, falling back to JSON: %s", e)
-        _save_json_memory(repo, pr_number, findings, verdict)
-
-
-def _save_json_memory(repo: str, pr_number: int, findings: list[dict], verdict: str):
-    """备用方案：保存到 JSON 文件。"""
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    memory_file = MEMORY_DIR / f"{repo.replace('/', '_')}_{pr_number}.json"
-
-    record = {
-        "repo": repo,
-        "pr_number": pr_number,
-        "verdict": verdict,
-        "findings_count": len(findings),
-        "finding_types": list({f.get("rule_id", "unknown") for f in findings}),
-        "severities": list({f.get("severity", "info") for f in findings}),
-        "reviewed_at": datetime.now().isoformat(),
-    }
-
-    history: list[dict] = []
-    if memory_file.exists():
+    with _db_lock:
+        conn = _get_db()
         try:
-            data = json.loads(memory_file.read_text())
-            history = data.get("history", [])
-        except (json.JSONDecodeError, KeyError):
-            pass
+            conn.execute(
+                """INSERT INTO reviews (repo, pr_number, verdict, findings_count,
+                   finding_types, severities, reviewed_at, trace_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    repo, pr_number, verdict, len(findings),
+                    json.dumps(finding_types), json.dumps(severities),
+                    datetime.now().isoformat(), trace_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-    history.append(record)
-    memory_file.write_text(json.dumps({"history": history}, indent=2, ensure_ascii=False))
-    logger.info("Memory saved (JSON): %s/%d", repo, pr_number)
+    logger.info(
+        "Memory saved: %s/%d (%d findings, verdict=%s)",
+        repo, pr_number, len(findings), verdict,
+    )
 
 
 def load_review_memory(repo: str, pr_number: int | None = None) -> dict | None:
     """加载某个仓库的审查记忆（可选指定具体 PR）。"""
-    try:
-        with _db_lock:
-            conn = _get_db()
-            try:
-                if pr_number is not None:
-                    cursor = conn.execute(
-                        "SELECT * FROM reviews WHERE repo = ? AND pr_number = ? ORDER BY reviewed_at DESC LIMIT 1",
-                        (repo, pr_number),
-                    )
-                else:
-                    cursor = conn.execute(
-                        "SELECT * FROM reviews WHERE repo = ? ORDER BY reviewed_at DESC LIMIT 10",
-                        (repo,),
-                    )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+    with _db_lock:
+        conn = _get_db()
+        try:
+            if pr_number is not None:
+                cursor = conn.execute(
+                    "SELECT * FROM reviews WHERE repo = ? AND pr_number = ? ORDER BY reviewed_at DESC LIMIT 1",
+                    (repo, pr_number),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM reviews WHERE repo = ? ORDER BY reviewed_at DESC LIMIT 10",
+                    (repo,),
+                )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
 
-            if not rows:
-                return None
+        if not rows:
+            return None
 
-            columns = [desc[0] for desc in cursor.description]
-            records = [dict(zip(columns, row)) for row in rows]
-            # 解析 JSON 字段
-            for r in records:
-                if r.get("finding_types"):
-                    try:
-                        r["finding_types"] = json.loads(r["finding_types"])
-                    except json.JSONDecodeError:
-                        r["finding_types"] = []
-                if r.get("severities"):
-                    try:
-                        r["severities"] = json.loads(r["severities"])
-                    except json.JSONDecodeError:
-                        r["severities"] = []
+        columns = [desc[0] for desc in cursor.description]
+        records = [dict(zip(columns, row)) for row in rows]
+        for r in records:
+            if r.get("finding_types"):
+                try:
+                    r["finding_types"] = json.loads(r["finding_types"])
+                except json.JSONDecodeError:
+                    r["finding_types"] = []
+            if r.get("severities"):
+                try:
+                    r["severities"] = json.loads(r["severities"])
+                except json.JSONDecodeError:
+                    r["severities"] = []
 
-            return {"history": records} if pr_number is None else records[0]
-    except Exception as e:
-        logger.warning("SQLite memory load failed, falling back to JSON: %s", e)
-        return _load_json_memory(repo, pr_number)
-
-
-def _load_json_memory(repo: str, pr_number: int | None = None) -> dict | None:
-    """备用方案：从 JSON 文件加载。"""
-    if pr_number is not None:
-        memory_file = MEMORY_DIR / f"{repo.replace('/', '_')}_{pr_number}.json"
-    else:
-        memory_file = MEMORY_DIR / f"{repo.replace('/', '_')}_all.json"
-
-    if not memory_file.exists():
-        return None
-
-    try:
-        return json.loads(memory_file.read_text())
-    except json.JSONDecodeError:
-        return None
+        return {"history": records} if pr_number is None else records[0]
 
 
 def build_memory_context(repo: str) -> str:
@@ -203,84 +147,77 @@ def build_memory_context(repo: str) -> str:
        Last review: 3 findings, verdict=request_changes.
        Pay extra attention to these patterns."
     """
-    try:
-        with _db_lock:
-            conn = _get_db()
-            try:
-                cursor = conn.execute(
-                    "SELECT finding_types, severities, verdict, findings_count, reviewed_at "
-                    "FROM reviews WHERE repo = ? ORDER BY reviewed_at DESC",
-                    (repo,),
-                )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
-
-            if not rows:
-                return ""
-
-            pattern_counts: Counter = Counter()
-            severity_counts: Counter = Counter()
-            total_reviews = len(rows)
-            last_review = rows[0]
-
-            for row in rows:
-                finding_types = json.loads(row[0]) if row[0] else []
-                severities = json.loads(row[1]) if row[1] else []
-                # 只统计 blocker 和 major 级别的 pattern，避免误报强化确认偏误
-                for ft, sev in zip(finding_types, severities):
-                    if sev in ("blocker", "major"):
-                        pattern_counts[ft] += 1
-                severity_counts.update(severities)
-
-            # 最常见的前 5 种高危发现类型（仅 blocker + major）
-            top_patterns = pattern_counts.most_common(5)
-            patterns_text = ", ".join(f"{name} ({count}x)" for name, count in top_patterns)
-
-            # 严重级别分布
-            severity_text = ", ".join(f"{sev}: {count}" for sev, count in severity_counts.most_common())
-
-            # 最近一次审查信息
-            last_verdict = last_review[2] or "unknown"
-            last_findings = last_review[3] or 0
-            last_date = (last_review[4] or "")[:10]
-
-            parts = [
-                f"\n## Repository Memory ({total_reviews} past reviews)",
-                f"High-severity patterns: {patterns_text}" if patterns_text else "",
-                f"Severity breakdown: {severity_text}" if severity_text else "",
-                f"Last review ({last_date}): {last_findings} findings, verdict={last_verdict}.",
-            ]
-            return "\n".join(p for p in parts if p) + "\n"
-
-    except Exception as e:
-        logger.warning("SQLite memory context failed, falling back to JSON: %s", e)
-        return _build_json_memory_context(repo)
-
-
-def _build_json_memory_context(repo: str) -> str:
-    """备用方案：从 JSON 文件构建上下文。"""
-    pattern_counts: dict[str, int] = {}
-    total_reviews = 0
-
-    for memory_file in MEMORY_DIR.glob(f"{repo.replace('/', '_')}*.json"):
+    with _db_lock:
+        conn = _get_db()
         try:
-            data = json.loads(memory_file.read_text())
-            for record in data.get("history", []):
-                total_reviews += 1
-                for finding_type in record.get("finding_types", []):
-                    pattern_counts[finding_type] = pattern_counts.get(finding_type, 0) + 1
-        except (json.JSONDecodeError, KeyError):
-            continue
+            cursor = conn.execute(
+                "SELECT finding_types, severities, verdict, findings_count, reviewed_at "
+                "FROM reviews WHERE repo = ? ORDER BY reviewed_at DESC",
+                (repo,),
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
 
-    if not pattern_counts:
-        return ""
+        if not rows:
+            return ""
 
-    top_patterns = sorted(pattern_counts.items(), key=lambda x: -x[1])[:5]
-    patterns_text = ", ".join(f"{name} ({count}x)" for name, count in top_patterns)
+        pattern_counts: Counter = Counter()
+        severity_counts: Counter = Counter()
+        total_reviews = len(rows)
+        last_review = rows[0]
 
-    return (
-        f"\n## Repository Memory ({total_reviews} past reviews)\n"
-        f"Common issues found: {patterns_text}\n"
-        f"Pay extra attention to these patterns.\n"
-    )
+        for row in rows:
+            finding_types = json.loads(row[0]) if row[0] else []
+            severities = json.loads(row[1]) if row[1] else []
+            # 只统计 blocker 和 major 级别的 pattern，避免误报强化确认偏误
+            for ft, sev in zip(finding_types, severities):
+                if sev in ("blocker", "major"):
+                    pattern_counts[ft] += 1
+            severity_counts.update(severities)
+
+        # 最常见的前 5 种高危发现类型（仅 blocker + major）
+        top_patterns = pattern_counts.most_common(5)
+        patterns_text = ", ".join(f"{name} ({count}x)" for name, count in top_patterns)
+
+        # 严重级别分布
+        severity_text = ", ".join(f"{sev}: {count}" for sev, count in severity_counts.most_common())
+
+        # 最近一次审查信息
+        last_verdict = last_review[2] or "unknown"
+        last_findings = last_review[3] or 0
+        last_date = (last_review[4] or "")[:10]
+
+        parts = [
+            f"\n## Repository Memory ({total_reviews} past reviews)",
+            f"High-severity patterns: {patterns_text}" if patterns_text else "",
+            f"Severity breakdown: {severity_text}" if severity_text else "",
+            f"Last review ({last_date}): {last_findings} findings, verdict={last_verdict}.",
+        ]
+        return "\n".join(p for p in parts if p) + "\n"
+
+
+def cleanup_old_reviews(retention_days: int = DEFAULT_RETENTION_DAYS) -> int:
+    """清理超过保留天数的审查记录。
+
+    Args:
+        retention_days: 保留最近多少天的记录，默认 90 天。
+
+    Returns:
+        被删除的记录数。
+    """
+    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+    with _db_lock:
+        conn = _get_db()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM reviews WHERE reviewed_at < ?", (cutoff,)
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+
+    if deleted > 0:
+        logger.info("Memory cleanup: removed %d reviews older than %d days", deleted, retention_days)
+    return deleted

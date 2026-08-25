@@ -282,7 +282,10 @@ def get_idempotency_store() -> IdempotencyStore | RedisIdempotencyStore:
             _idempotency_store = IdempotencyStore()
     else:
         _idempotency_store = IdempotencyStore()
-        logger.info("Using in-memory idempotency store")
+        logger.warning(
+            "Using in-memory idempotency store — NOT safe for multi-worker deployments. "
+            "Set REDIS_URL for multi-worker (e.g. uvicorn --workers N) consistency."
+        )
 
     return _idempotency_store
 
