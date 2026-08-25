@@ -40,7 +40,6 @@ class TestWebhookSignature:
         expected = "sha256=" + hmac.new(
             secret.encode(), payload, hashlib.sha256
         ).hexdigest()
-        # Tamper with payload
         assert verify_webhook_signature(b'{"action": "closed"}', expected, secret) is False
 
 
@@ -87,29 +86,47 @@ class TestParseWebhookPayload:
         assert result["author"] == ""
 
 
+def _mock_response(status_code=200, json_data=None, text=""):
+    """创建 mock httpx.Response。"""
+    mock = MagicMock()
+    mock.status_code = status_code
+    mock.text = text
+    mock.json.return_value = json_data if json_data is not None else {}
+    return mock
+
+
 class TestGitHubClient:
-    @patch("cr_agent.github.client.subprocess.run")
-    def test_get_pr_diff_masks_secrets(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout="diff --git a/file.py\n+token = ghp_1234567890abcdefghijklmnopqrstuv",
-            returncode=0,
+    @patch("cr_agent.github.client.httpx.get")
+    def test_get_pr_diff_masks_secrets(self, mock_get):
+        mock_get.return_value = _mock_response(
+            status_code=200,
+            text="diff --git a/file.py\n+token = ghp_1234567890abcdefghijklmnopqrstuv",
         )
         diff = get_pr_diff(42, "owner/repo", token="fake_token")
         assert "ghp_1234567890" not in diff
         assert "[REDACTED]" in diff
 
-    @patch("cr_agent.github.client.subprocess.run")
-    def test_get_pr_info_parses_json(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps({
+    @patch("cr_agent.github.client.httpx.get")
+    def test_get_pr_diff_raises_on_error(self, mock_get):
+        mock_get.return_value = _mock_response(status_code=404, text="Not Found")
+        try:
+            get_pr_diff(42, "owner/repo", token="fake_token")
+            assert False, "Should have raised RuntimeError"
+        except RuntimeError as e:
+            assert "404" in str(e)
+
+    @patch("cr_agent.github.client.httpx.get")
+    def test_get_pr_info_parses_json(self, mock_get):
+        mock_get.return_value = _mock_response(
+            status_code=200,
+            json_data={
                 "number": 42,
                 "title": "Fix bug",
-                "author": {"login": "dev"},
+                "user": {"login": "dev"},
                 "body": "Fixes issue",
-                "baseRefName": "main",
-                "headRefName": "fix-branch",
-            }),
-            returncode=0,
+                "base": {"ref": "main"},
+                "head": {"ref": "fix-branch"},
+            },
         )
         info = get_pr_info(42, "owner/repo", token="fake_token")
         assert info.number == 42
@@ -118,31 +135,38 @@ class TestGitHubClient:
         assert info.base == "main"
         assert info.head == "fix-branch"
 
-    @patch("cr_agent.github.client.subprocess.run")
-    def test_post_pr_comment_creates_new(self, mock_run):
-        # First call: list comments (no existing CR comment)
-        # Second call: create new comment
-        mock_run.side_effect = [
-            MagicMock(stdout="[]", returncode=0),  # No existing comments
-            MagicMock(stdout="", returncode=0),     # Comment created
-        ]
-        result = post_pr_comment(42, "owner/repo", "## Code Review Report\nAll good.", token="fake")
-        assert result is True
+    @patch("cr_agent.github.client.httpx.get")
+    def test_post_pr_comment_creates_new(self, mock_get):
+        # List comments returns empty (no existing CR comment)
+        mock_get.return_value = _mock_response(status_code=200, json_data=[])
 
-    @patch("cr_agent.github.client.subprocess.run")
-    def test_post_pr_comment_updates_existing(self, mock_run):
-        # First call: find existing CR comment
-        # Second call: update via API
-        existing = json.dumps({
-            "id": 12345,
-            "body": "## Code Review Report\nOld review."
-        })
-        mock_run.side_effect = [
-            MagicMock(stdout=existing, returncode=0),
-            MagicMock(stdout="", returncode=0),
-        ]
-        result = post_pr_comment(42, "owner/repo", "## Code Review Report\nNew review.", token="fake")
-        assert result is True
-        # Verify the second call used PATCH (update, not create)
-        second_call_args = mock_run.call_args_list[1][0][0]
-        assert "PATCH" in second_call_args
+        with patch("cr_agent.github.client.httpx.post") as mock_post:
+            mock_post.return_value = _mock_response(status_code=201)
+            result = post_pr_comment(42, "owner/repo", "## Code Review Report\nAll good.", token="fake")
+            assert result is True
+
+    @patch("cr_agent.github.client.httpx.get")
+    def test_post_pr_comment_updates_existing(self, mock_get):
+        # List comments returns existing CR comment
+        mock_get.return_value = _mock_response(
+            status_code=200,
+            json_data=[{
+                "id": 12345,
+                "body": "## Code Review Report\nOld review."
+            }],
+        )
+
+        with patch("cr_agent.github.client.httpx.patch") as mock_patch:
+            mock_patch.return_value = _mock_response(status_code=200)
+            result = post_pr_comment(42, "owner/repo", "## Code Review Report\nNew review.", token="fake")
+            assert result is True
+
+    @patch("cr_agent.github.client.httpx.get")
+    def test_post_pr_comment_no_token_still_works(self, mock_get):
+        # List comments returns empty
+        mock_get.return_value = _mock_response(status_code=200, json_data=[])
+
+        with patch("cr_agent.github.client.httpx.post") as mock_post:
+            mock_post.return_value = _mock_response(status_code=201)
+            result = post_pr_comment(42, "owner/repo", "## Code Review Report\nAll good.", token=None)
+            assert result is True
