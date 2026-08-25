@@ -28,7 +28,7 @@ from cr_agent.agent.middlewares.tool_error_handling import ToolErrorHandler
 from cr_agent.agent.prompts import SYSTEM_PROMPT, build_review_prompt
 from cr_agent.agent.state import AgentState
 from cr_agent.agent.tools import ALL_TOOLS
-from cr_agent.core.diff_parser import compute_metrics, parse_diff
+from cr_agent.core.diff_parser import DiffHunk, compute_metrics, parse_diff
 from cr_agent.core.models import (
     Confidence,
     DiffMetrics,
@@ -46,6 +46,44 @@ MAX_ITERATIONS = 15
 # 模块级熔断器单例：跨多次审查共享状态，避免每次 build_graph 重置
 from cr_agent.observability.logger import CircuitBreaker as _CircuitBreaker
 _llm_circuit_breaker = _CircuitBreaker(threshold=5, recovery_timeout=60.0)
+
+# 增量审查阈值：diff 超过此字符数时启用 hunk 压缩
+INCREMENTAL_REVIEW_THRESHOLD = 10_000
+# 每个 hunk 保留的上下文行数（变更行前后各保留多少行）
+HUNK_CONTEXT_LINES = 2
+
+
+def _compress_diff_for_llm(hunks: list[DiffHunk]) -> str:
+    """将大 diff 按 hunk 压缩，只保留变更行 + 少量上下文行。
+
+    确定性规则引擎在完整 diff 上运行（不受影响）。
+    LLM 收到的是压缩后的 diff，大幅减少 token 消耗。
+
+    压缩策略：
+    - 每个 hunk 保留变更行（+/- 行）和前后各 HUNK_CONTEXT_LINES 行上下文
+    - 跳过纯上下文的大段未变更代码
+    - 用分隔符标注 hunk 边界，保留 file 和行号信息
+    """
+    compressed_parts: list[str] = []
+    for hunk in hunks:
+        if not hunk.file or not hunk.lines:
+            continue
+
+        changed_indices = [
+            i for i, line in enumerate(hunk.lines)
+            if line.startswith("+") or line.startswith("-")
+        ]
+        if not changed_indices:
+            continue
+
+        first = max(0, changed_indices[0] - HUNK_CONTEXT_LINES)
+        last = min(len(hunk.lines) - 1, changed_indices[-1] + HUNK_CONTEXT_LINES)
+
+        header = f"--- {hunk.file} (lines around {hunk.new_start or '?'}) ---"
+        selected = hunk.lines[first:last + 1]
+        compressed_parts.append(header + "\n" + "\n".join(selected))
+
+    return "\n\n".join(compressed_parts)
 
 
 def _prepare_review(state: AgentState) -> dict:
@@ -65,7 +103,20 @@ def _prepare_review(state: AgentState) -> dict:
     det_findings = run_deterministic_checks(hunks)
     files_changed, lines_added, lines_removed = compute_metrics(hunks)
 
-    safe_diff = sanitize_input(diff)
+    # 增量审查：diff 较大时压缩传给 LLM 的内容，确定性规则不受影响
+    diff_for_llm = diff
+    incremental_used = False
+    if len(diff) > INCREMENTAL_REVIEW_THRESHOLD:
+        compressed = _compress_diff_for_llm(hunks)
+        if len(compressed) < len(diff):
+            diff_for_llm = compressed
+            incremental_used = True
+            logger.info(
+                "增量审查: diff %d → %d 字符 (压缩 %.0f%%)",
+                len(diff), len(compressed), (1 - len(compressed) / len(diff)) * 100,
+            )
+
+    safe_diff = sanitize_input(diff_for_llm)
     safe_pr_info = {
         k: sanitize_input(str(v)) if isinstance(v, str) else v
         for k, v in pr_info.items()
@@ -78,9 +129,10 @@ def _prepare_review(state: AgentState) -> dict:
     system_msg = SystemMessage(content=SYSTEM_PROMPT)
 
     logger.info(
-        "审查准备完成: %d 个文件, +%d/-%d 行, %d 条确定性发现%s",
+        "审查准备完成: %d 个文件, +%d/-%d 行, %d 条确定性发现%s%s",
         files_changed, lines_added, lines_removed, len(det_findings),
         " (diff 已截断)" if diff_truncated else "",
+        " (增量审查)" if incremental_used else "",
     )
 
     return {
@@ -208,6 +260,79 @@ def _should_continue(state: AgentState) -> str:
     return "finalize"
 
 
+def _category_from_rule_id(rule_id: str) -> str:
+    """从 rule_id 提取问题类别，用于跨来源去重。
+
+    确定性规则: "security.sql-injection" → "security.sql-injection"
+    LLM 规则:   "llm.unknown" → 无法匹配，返回 "llm.unknown"
+    去重时尝试用 (file, line, category) 匹配，category 不一致则不去重。
+    """
+    return rule_id
+
+
+def _findings_match(a: Finding, b: Finding) -> bool:
+    """判断两条 Finding 是否指向同一个问题（用于去重）。
+
+    匹配策略（从严到松）：
+    1. 同 file + 同 line + 同 rule_id → 精确匹配
+    2. 同 file + 同 line + rule_id 类别前缀相同 → 跨来源匹配
+       例如 "security.sql-injection" 和 "llm.sql-injection" 视为同类
+    3. 同 file + 同 line + message 关键词重叠 → 兜底匹配
+    """
+    if a.file != b.file:
+        return False
+    if a.line is not None and b.line is not None and a.line != b.line:
+        return False
+    if a.line is None or b.line is None:
+        # 行号未知的 finding 不参与去重，保留两条
+        return False
+
+    if a.rule_id == b.rule_id:
+        return True
+
+    a_cat = a.rule_id.split(".", 1)[-1]
+    b_cat = b.rule_id.split(".", 1)[-1]
+    if a_cat == b_cat and a_cat != "unknown":
+        return True
+
+    a_words = set(a.message.lower().split())
+    b_words = set(b.message.lower().split())
+    overlap = a_words & b_words - {"the", "a", "an", "in", "of", "to", "is", "and"}
+    if len(overlap) >= 2:
+        return True
+
+    return False
+
+
+def _deduplicate_findings(findings: list[Finding]) -> list[Finding]:
+    """合并确定性规则和 LLM 的重复发现。
+
+    去重策略：按 (file, line, 问题类别) 匹配，保留信息更丰富的那条。
+    优先保留有 suggestion 和更高 confidence 的 finding。
+    如果两条都保留，取 severity 更高的。
+    """
+    if not findings:
+        return []
+
+    deduped: list[Finding] = []
+    for f in findings:
+        matched = False
+        for i, existing in enumerate(deduped):
+            if _findings_match(existing, f):
+                # 合并：保留信息更丰富的那条
+                if len(f.suggestion) > len(existing.suggestion):
+                    deduped[i] = f
+                elif len(f.suggestion) == len(existing.suggestion):
+                    if f.confidence.value > existing.confidence.value:
+                        deduped[i] = f
+                matched = True
+                break
+        if not matched:
+            deduped.append(f)
+
+    return deduped
+
+
 def _finalize(state: AgentState) -> dict:
     """从最后一条 AIMessage 的 content 中解析 LLM 审查结果，构建 ReviewReport。"""
     det_findings = state.get("deterministic_findings", [])
@@ -221,7 +346,10 @@ def _finalize(state: AgentState) -> dict:
                 llm_findings = _parse_llm_findings(content)
             break
 
-    all_findings = det_findings + llm_findings
+    raw_count = len(det_findings) + len(llm_findings)
+    all_findings = _deduplicate_findings(det_findings + llm_findings)
+    if raw_count > len(all_findings):
+        logger.info("去重: %d 条 → %d 条 (移除 %d 条重复)", raw_count, len(all_findings), raw_count - len(all_findings))
     hunks = parse_diff(state["diff"])
     files_changed, lines_added, lines_removed = compute_metrics(hunks)
     verdict = determine_verdict(all_findings)

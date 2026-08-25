@@ -2,7 +2,7 @@
 
 学习重点：
   - HMAC webhook 验证：为什么需要以及如何实现（防止伪造的 webhook）
-  - 通过 gh CLI 调用 GitHub API：无需 API 库，只需 subprocess
+  - 通过 GitHub REST API 获取 PR diff 和发表评论：不依赖 gh CLI
   - PR 评论的幂等性：更新已有评论 vs 创建新评论
   - Token 注入：通过 GH_TOKEN 环境变量传入，绝不出现在提示词或日志中
 
@@ -10,10 +10,11 @@
   1. Webhook 模式：FastAPI 服务器接收 GitHub webhook，触发代码审查
   2. CLI 模式：通过 PR 编号手动审查（用于测试/学习）
 
-为什么用 gh CLI 而不是 PyGithub/requests？
-  - gh 自动处理认证、分页、速率限制
-  - 代码更少，依赖更少
-  - Token 通过 GH_TOKEN 环境变量注入，不会出现在我们的代码中
+为什么用 GitHub REST API 而不是 gh CLI？
+  - 不需要安装 gh CLI，降低部署门槛
+  - httpx 是项目已有依赖，不引入新依赖
+  - Token 通过 GH_TOKEN 环境变量注入，不会出现在代码中
+  - 更容易测试（mock httpx 比 mock subprocess 更直接）
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ import hashlib
 import hmac
 import json
 import os
-import subprocess
+
+import httpx
 from dataclasses import dataclass
 
 from cr_agent.security.sanitizer import mask_secrets
-from cr_agent.security.env_sanitizer import build_safe_env
+
+GITHUB_API_BASE = "https://api.github.com"
 
 
 @dataclass
@@ -40,6 +43,14 @@ class PRInfo:
     body: str = ""
     base: str = ""
     head: str = ""
+
+
+def _build_headers(token: str | None) -> dict[str, str]:
+    """构建 GitHub API 请求头。"""
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return headers
 
 
 def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -64,140 +75,89 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
 
 
 def get_pr_diff(pr_number: int, repo: str, token: str | None = None) -> str:
-    """使用 gh CLI 获取 PR 的 diff。
+    """通过 GitHub REST API 获取 PR 的 diff。
 
-    gh pr diff <number> --repo <owner/repo>
+    GET /repos/{owner}/{repo}/pulls/{pr_number}
+    Accept: application/vnd.github.v3.diff
 
     Raises:
-        RuntimeError: gh CLI 执行失败（非零退出码或超时）。
+        RuntimeError: API 请求失败（非 200 状态码）。
     """
-    env = {"GH_TOKEN": token} if token else None
-    result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=build_safe_env(env),
-    )
-    if result.returncode != 0:
+    headers = _build_headers(token)
+    headers["Accept"] = "application/vnd.github.v3.diff"
+
+    url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pr_number}"
+    resp = httpx.get(url, headers=headers, timeout=30)
+    if resp.status_code != 200:
         raise RuntimeError(
-            f"gh pr diff failed (exit {result.returncode}): {result.stderr[:200]}"
+            f"GitHub API get_pr_diff failed (status {resp.status_code}): {resp.text[:200]}"
         )
-    diff = result.stdout
+    diff = resp.text
     return mask_secrets(diff)
 
 
 def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
-    """使用 gh CLI 获取 PR 元数据。
+    """通过 GitHub REST API 获取 PR 元数据。
 
-    gh pr view <number> --repo <owner/repo> --json number,title,author,body,baseRefName,headRefName
+    GET /repos/{owner}/{repo}/pulls/{pr_number}
+    返回 JSON，包含 number, title, user, body, base, head 等字段。
 
     Raises:
-        RuntimeError: gh CLI 执行失败或返回非 JSON。
+        RuntimeError: API 请求失败。
     """
-    env = {"GH_TOKEN": token} if token else None
-    result = subprocess.run(
-        [
-            "gh", "pr", "view", str(pr_number), "--repo", repo,
-            "--json", "number,title,author,body,baseRefName,headRefName",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=build_safe_env(env),
-    )
-    if result.returncode != 0:
+    headers = _build_headers(token)
+    url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pr_number}"
+    resp = httpx.get(url, headers=headers, timeout=30)
+    if resp.status_code != 200:
         raise RuntimeError(
-            f"gh pr view failed (exit {result.returncode}): {result.stderr[:200]}"
+            f"GitHub API get_pr_info failed (status {resp.status_code}): {resp.text[:200]}"
         )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"gh pr view returned non-JSON output: {result.stdout[:200]}"
-        ) from e
+    data = resp.json()
     return PRInfo(
         number=data.get("number", pr_number),
         repo=repo,
         title=data.get("title", ""),
-        author=data.get("author", {}).get("login", "") if isinstance(data.get("author"), dict) else str(data.get("author", "")),
+        author=data.get("user", {}).get("login", ""),
         body=data.get("body", ""),
-        base=data.get("baseRefName", ""),
-        head=data.get("headRefName", ""),
+        base=data.get("base", {}).get("ref", ""),
+        head=data.get("head", {}).get("ref", ""),
     )
 
 
 def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = None) -> bool:
-    """使用 gh CLI 在 PR 上发表评论。
+    """通过 GitHub REST API 在 PR 上发表评论。
 
     幂等性：检查是否已存在 CR Agent 的评论，若存在则更新，
     而不是在重新审查时创建重复评论。通过 "## Code Review Report" 标题来识别评论。
+
+    GET  /repos/{owner}/{repo}/issues/{pr_number}/comments  — 列出评论
+    POST /repos/{owner}/{repo}/issues/{pr_number}/comments  — 创建评论
+    PATCH /repos/{owner}/{repo}/issues/comments/{comment_id} — 更新评论
     """
-    env = {"GH_TOKEN": token} if token else None
-    full_env = build_safe_env(env)
+    headers = _build_headers(token)
 
     # 检查已有的审查评论（幂等性）
-    list_result = subprocess.run(
-        ["gh", "pr", "view", str(pr_number), "--repo", repo,
-         "--json", "comments", "--jq", ".comments[] | {id: .id, body: .body}"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=full_env,
-    )
-
-    # 通过标题查找已有的 CR Agent 评论
     existing_comment_id = None
-    if list_result.returncode == 0 and list_result.stdout.strip():
-        try:
-            import json as _json
-            comments = _json.loads(list_result.stdout) if list_result.stdout.strip().startswith("[") else None
-            if comments is None:
-                # 尝试逐行解析 JSON（jq 每行输出一个 JSON 对象）
-                for line in list_result.stdout.strip().split("\n"):
-                    if line.strip():
-                        try:
-                            c = _json.loads(line)
-                            if "Code Review Report" in c.get("body", ""):
-                                existing_comment_id = str(c.get("id", ""))
-                                break
-                        except _json.JSONDecodeError:
-                            continue
-            elif isinstance(comments, list):
-                for c in comments:
-                    if isinstance(c, dict) and "Code Review Report" in c.get("body", ""):
-                        existing_comment_id = str(c.get("id", ""))
-                        break
-        except (_json.JSONDecodeError, TypeError):
-            pass
-    elif list_result.returncode != 0:
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "gh pr view comments failed (exit %d): %s. Will create new comment.",
-            list_result.returncode, list_result.stderr[:200],
-        )
+    list_url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pr_number}/comments"
+    try:
+        list_resp = httpx.get(list_url, headers=headers, timeout=30)
+        if list_resp.status_code == 200:
+            for comment in list_resp.json():
+                if "Code Review Report" in comment.get("body", ""):
+                    existing_comment_id = comment.get("id")
+                    break
+    except Exception:
+        pass  # 列出评论失败时降级为创建新评论
 
     if existing_comment_id:
         # 更新已有评论
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/comments/{existing_comment_id}",
-             "--method", "PATCH", "--field", f"body={body}"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=full_env,
-        )
-        return result.returncode == 0
+        patch_url = f"{GITHUB_API_BASE}/repos/{repo}/issues/comments/{existing_comment_id}"
+        resp = httpx.patch(patch_url, headers=headers, json={"body": body}, timeout=30)
+        return resp.status_code == 200
     else:
         # 创建新评论
-        result = subprocess.run(
-            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=full_env,
-        )
-        return result.returncode == 0
+        resp = httpx.post(list_url, headers=headers, json={"body": body}, timeout=30)
+        return resp.status_code in (200, 201)
 
 
 def parse_webhook_payload(payload: bytes) -> dict | None:
