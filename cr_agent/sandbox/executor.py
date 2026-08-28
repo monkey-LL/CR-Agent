@@ -33,7 +33,7 @@ _ALLOWED_COMMANDS = {
     "go", "golangci-lint", "staticcheck",
     "rustc", "cargo", "clippy",
     "java", "javac", "spotbugs",
-    "cat", "head", "wc",
+    "cat", "head", "wc", "grep",
 }
 
 # python3 / node 中允许任意代码执行的 flag —— 必须拒绝

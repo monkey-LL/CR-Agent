@@ -127,12 +127,17 @@ def get_pr_info(pr_number: int, repo: str, token: str | None = None) -> PRInfo:
     )
 
 
+CR_AGENT_SIGNATURE = "<!-- cr-agent-v1 -->"
+
+
 def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = None) -> bool:
     """使用 gh CLI 在 PR 上发表评论。
 
     幂等性：检查是否已存在 CR Agent 的评论，若存在则更新，
-    而不是在重新审查时创建重复评论。通过 "## Code Review Report" 标题来识别评论。
+    而不是在重新审查时创建重复评论。通过 HTML 注释签名来唯一标识评论。
     """
+    # 在评论体中嵌入签名标识
+    body = f"{CR_AGENT_SIGNATURE}\n{body}"
     env = {"GH_TOKEN": token} if token else None
     full_env = build_safe_env(env)
 
@@ -146,7 +151,7 @@ def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = No
         env=full_env,
     )
 
-    # 通过标题查找已有的 CR Agent 评论
+    # 通过签名标识查找已有的 CR Agent 评论
     existing_comment_id = None
     if list_result.returncode == 0 and list_result.stdout.strip():
         try:
@@ -158,14 +163,14 @@ def post_pr_comment(pr_number: int, repo: str, body: str, token: str | None = No
                     if line.strip():
                         try:
                             c = _json.loads(line)
-                            if "Code Review Report" in c.get("body", ""):
+                            if CR_AGENT_SIGNATURE in c.get("body", ""):
                                 existing_comment_id = str(c.get("id", ""))
                                 break
                         except _json.JSONDecodeError:
                             continue
             elif isinstance(comments, list):
                 for c in comments:
-                    if isinstance(c, dict) and "Code Review Report" in c.get("body", ""):
+                    if isinstance(c, dict) and CR_AGENT_SIGNATURE in c.get("body", ""):
                         existing_comment_id = str(c.get("id", ""))
                         break
         except (_json.JSONDecodeError, TypeError):

@@ -131,11 +131,12 @@ class TestGitHubClient:
 
     @patch("cr_agent.github.client.subprocess.run")
     def test_post_pr_comment_updates_existing(self, mock_run):
-        # First call: find existing CR comment
+        # First call: find existing CR comment (with signature)
         # Second call: update via API
+        from cr_agent.github.client import CR_AGENT_SIGNATURE
         existing = json.dumps({
             "id": 12345,
-            "body": "## Code Review Report\nOld review."
+            "body": f"{CR_AGENT_SIGNATURE}\n## Code Review Report\nOld review."
         })
         mock_run.side_effect = [
             MagicMock(stdout=existing, returncode=0),

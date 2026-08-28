@@ -83,6 +83,17 @@ class IdempotencyStore:
         now = time.time()
 
         with self._lock:
+            # 周期性清理已过期的 DONE 记录（每 100 次调用清理一次）
+            if len(self._store) > 0 and len(self._store) % 100 == 0:
+                expired = [
+                    k for k, v in self._store.items()
+                    if v.status == ReviewStatus.DONE
+                    and now - v.completed_at > self._ttl
+                ]
+                for k in expired:
+                    del self._store[k]
+
+            record = self._store.get(key)
             record = self._store.get(key)
 
             if record:

@@ -37,6 +37,7 @@ def _get_db() -> sqlite3.Connection:
     """获取或创建 SQLite 记忆数据库。"""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(MEMORY_DB))
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,13 +119,13 @@ def load_review_memory(repo: str, pr_number: int | None = None) -> dict | None:
                     (repo,),
                 )
             rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description] if rows else []
         finally:
             conn.close()
 
         if not rows:
             return None
 
-        columns = [desc[0] for desc in cursor.description]
         records = [dict(zip(columns, row)) for row in rows]
         for r in records:
             if r.get("finding_types"):

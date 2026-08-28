@@ -506,6 +506,14 @@ function toggleTheme() {
   }
 }
 
+// ===== Helpers =====
+function escapeHtml(str) {
+  if (str == null) return '';
+  const div = document.createElement('div');
+  div.textContent = String(str);
+  return div.innerHTML;
+}
+
 // ===== Data =====
 const SAMPLE_DIFF = `--- a/src/auth/login.py
 +++ b/src/auth/login.py
@@ -552,7 +560,7 @@ async function loadRules() {
     const rules = await r.json();
     const bar = document.getElementById('rulesBar');
     bar.innerHTML = rules.map(r =>
-      `<span class="rule-chip" title="${r.message}">${r.rule_id}</span>`
+      `<span class="rule-chip" title="${escapeHtml(r.message)}">${escapeHtml(r.rule_id)}</span>`
     ).join('');
   } catch(e) {}
 }
@@ -598,14 +606,14 @@ async function runReview() {
 
     const data = await resp.json();
     if (data.error) {
-      document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">${data.error}</div></div>`;
+      document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">${escapeHtml(data.error)}</div></div>`;
       return;
     }
 
     lastResultData = data;
     renderResult(data);
   } catch(e) {
-    document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">Error: ${e.message}</div></div>`;
+    document.getElementById('resultBody').innerHTML = `<div class="result-empty"><div style="color:var(--red)">Error: ${escapeHtml(e.message)}</div></div>`;
   } finally {
     btn.disabled = false;
     document.getElementById('loadingOverlay').classList.remove('show');
@@ -624,7 +632,7 @@ function renderResult(data) {
   html += `<div class="verdict-banner ${verdictClass}">${verdictIcon} ${data.verdict.toUpperCase()}</div>`;
 
   // Summary
-  html += `<div class="summary">${data.summary}</div>`;
+  html += `<div class="summary">${escapeHtml(data.summary)}</div>`;
 
   // Findings
   if (data.findings && data.findings.length > 0) {
@@ -635,11 +643,11 @@ function renderResult(data) {
         <div class="finding finding-sev-${sev}">
           <div class="finding-header">
             <span class="sev-tag sev-tag-${sev}">${sev}</span>
-            <span class="finding-file">${f.file || 'unknown'}:${f.line || '?'}</span>
-            <span style="margin-left:auto;font-size:10px;color:var(--text-dim);font-family:'SF Mono',Consolas,monospace">${f.source}</span>
+            <span class="finding-file">${escapeHtml(f.file || 'unknown')}:${escapeHtml(f.line || '?')}</span>
+            <span style="margin-left:auto;font-size:10px;color:var(--text-dim);font-family:'SF Mono',Consolas,monospace">${escapeHtml(f.source)}</span>
           </div>
-          <div class="finding-issue">${f.message}</div>
-          <div class="finding-suggestion"><strong>${t('fix')}:</strong> ${f.suggestion}</div>
+          <div class="finding-issue">${escapeHtml(f.message)}</div>
+          <div class="finding-suggestion"><strong>${t('fix')}:</strong> ${escapeHtml(f.suggestion)}</div>
         </div>`;
     }
   } else {

@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
 
 import structlog
@@ -72,15 +73,18 @@ class CircuitBreaker:
     _failures: int = 0
     _last_failure_time: float = 0.0
     _state: str = "closed"
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def call(self, func: Callable, *args, **kwargs):
-        if self._state == "open":
-            if time.time() - self._last_failure_time > self.recovery_timeout:
-                self._state = "half_open"
-                logger.info("circuit_breaker.half_open")
-            else:
-                raise CircuitBreakerOpenError("Circuit breaker is open")
+        with self._lock:
+            if self._state == "open":
+                if time.time() - self._last_failure_time > self.recovery_timeout:
+                    self._state = "half_open"
+                    logger.info("circuit_breaker.half_open")
+                else:
+                    raise CircuitBreakerOpenError("Circuit breaker is open")
 
+        # 在锁外执行实际调用，避免长时间持锁
         try:
             result = func(*args, **kwargs)
             self._on_success()
@@ -90,17 +94,19 @@ class CircuitBreaker:
             raise
 
     def _on_success(self):
-        self._failures = 0
-        if self._state != "closed":
-            logger.info("circuit_breaker.closed")
-        self._state = "closed"
+        with self._lock:
+            self._failures = 0
+            if self._state != "closed":
+                logger.info("circuit_breaker.closed")
+            self._state = "closed"
 
     def _on_failure(self):
-        self._failures += 1
-        self._last_failure_time = time.time()
-        if self._failures >= self.threshold:
-            self._state = "open"
-            logger.warning("circuit_breaker.opened", failures=self._failures)
+        with self._lock:
+            self._failures += 1
+            self._last_failure_time = time.time()
+            if self._failures >= self.threshold:
+                self._state = "open"
+                logger.warning("circuit_breaker.opened", failures=self._failures)
 
 
 class CircuitBreakerOpenError(Exception):

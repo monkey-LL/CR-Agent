@@ -9,11 +9,16 @@
 cd "$(dirname "$0")"
 export PYTHONPATH="$(pwd)"
 
-PYTHON=".venv/bin/python"
+PYTHON="${PYTHON:-.venv/bin/python}"
+if [ ! -f "$PYTHON" ]; then
+  PYTHON="python3"
+fi
 
 # 加载 .env 文件（如果存在）
 if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
+  set -a
+  source .env
+  set +a
 fi
 
 MODE=${1:-web}

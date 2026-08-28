@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import OrderedDict
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
@@ -30,7 +31,7 @@ app = FastAPI(title="CR Agent Webhook Server")
 
 WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 GITHUB_TOKEN = os.environ.get("GH_TOKEN", "")
-_processed_deliveries: set[str] = set()
+_processed_deliveries: OrderedDict[str, None] = OrderedDict()
 _MAX_DEDUP = 1000
 
 if not WEBHOOK_SECRET:
@@ -55,14 +56,14 @@ async def handle_webhook(
         logger.warning("webhook.signature_failed", delivery=x_github_delivery)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # 2. 按 delivery ID 去重
+    # 2. 按 delivery ID 去重（LRU 淘汰）
     if x_github_delivery in _processed_deliveries:
+        _processed_deliveries.move_to_end(x_github_delivery)
         logger.info("webhook.duplicate", delivery=x_github_delivery)
         return {"status": "duplicate", "delivery": x_github_delivery}
-    _processed_deliveries.add(x_github_delivery)
+    _processed_deliveries[x_github_delivery] = None
     if len(_processed_deliveries) > _MAX_DEDUP:
-        _processed_deliveries.clear()
-        _processed_deliveries.add(x_github_delivery)
+        _processed_deliveries.popitem(last=False)  # 移除最旧的条目
 
     # 3. 解析负载
     pr_data = parse_webhook_payload(body)

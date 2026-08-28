@@ -82,7 +82,7 @@ DETERMINISTIC_RULES: list[dict] = [
     },
     {
         "rule_id": "security.shell-true",
-        "pattern": r"subprocess\.(?:run|call|Popen|check_output)\s*\([^)]*shell\s*=\s*True",
+        "pattern": r"subprocess\.(?:run|call|Popen|check_output)\s*\(.*?shell\s*=\s*True",
         "severity": Severity.BLOCKER,
         "message": "subprocess with shell=True allows command injection.",
         "suggestion": "Pass arguments as a list with shell=False.",
@@ -153,7 +153,7 @@ DETERMINISTIC_RULES: list[dict] = [
     },
     {
         "rule_id": "error-handling.pass-in-except",
-        "pattern": r"except\s+\w+.*:\s*pass",
+        "pattern": r"except\s+\w+.*:\s*pass|^\s*pass\s*#\s*silent",
         "severity": Severity.MINOR,
         "message": "Silent exception handling — errors are swallowed without logging.",
         "suggestion": "At minimum, log the exception. Consider whether it should be re-raised.",

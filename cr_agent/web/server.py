@@ -18,7 +18,7 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -34,6 +34,7 @@ from cr_agent.observability.logger import logger
 app = FastAPI(title="CR Agent Web UI")
 
 WEB_DIR = Path(__file__).parent
+MAX_DIFF_SIZE = 500_000  # 500KB 请求体上限
 
 
 class ReviewRequest(BaseModel):
@@ -55,7 +56,8 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    from cr_agent import __version__
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/api/rules")
@@ -72,12 +74,20 @@ async def list_rules():
 
 
 @app.post("/api/review")
-async def review(req: ReviewRequest):
+async def review(req: ReviewRequest, request: Request):
     """执行代码审查并返回报告。
 
     如果 use_llm=False（默认），仅运行确定性检查 — 快速、免费。
     如果 use_llm=True，运行完整的 LangGraph agent 进行 LLM 语义分析。
     """
+    # 请求体大小检查
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_DIFF_SIZE:
+        return JSONResponse(
+            {"error": f"Request body too large (max {MAX_DIFF_SIZE} bytes)"},
+            status_code=413,
+        )
+
     start = time.time()
 
     if not req.diff.strip():

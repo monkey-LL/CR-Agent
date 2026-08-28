@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -38,6 +39,14 @@ from cr_agent.core.models import (
     determine_verdict,
 )
 from cr_agent.core.rules_engine import run_deterministic_checks
+from cr_agent.observability.metrics import (
+    finalize_metrics,
+    init_metrics,
+    record_iteration,
+    record_phase,
+    record_token_usage,
+    record_tool_call,
+)
 from cr_agent.security.sanitizer import sanitize_input
 
 logger = logging.getLogger(__name__)
@@ -123,12 +132,14 @@ def _prepare_review(state: AgentState) -> dict:
     }
 
 
-def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
+def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain, model_name: str = ""):
     """创建 LLM 决策节点，集成中间件。"""
     from cr_agent.observability.logger import CircuitBreakerOpenError, retry_with_backoff
 
     def _llm_decide(state: AgentState) -> dict:
         iteration = state.get("iteration", 0)
+        record_iteration()
+        phase_start = time.time()
 
         if iteration >= MAX_ITERATIONS:
             logger.warning("达到最大迭代次数 (%d)，强制终止", iteration)
@@ -152,6 +163,15 @@ def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
 
         try:
             response = _call_llm()
+            # 记录 token 使用量
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                record_token_usage(
+                    call_index=iteration + 1,
+                    prompt_tokens=response.usage_metadata.get("input_tokens", 0),
+                    completion_tokens=response.usage_metadata.get("output_tokens", 0),
+                    total_tokens=response.usage_metadata.get("total_tokens", 0),
+                    model=model_name,
+                )
         except CircuitBreakerOpenError:
             logger.warning("Circuit breaker open, forcing finalize")
             response = AIMessage(content="LLM service unavailable (circuit breaker open). Generating report with available findings.")
@@ -179,6 +199,7 @@ def _make_llm_node(llm: ChatOpenAI, chain: MiddlewareChain):
 
         chain.ctx.iteration = iteration + 1
 
+        record_phase(f"llm_iter_{iteration + 1}", phase_start)
         return {
             "messages": [response],
             "iteration": iteration + 1,
@@ -193,6 +214,7 @@ def _execute_tools(state: AgentState, chain: MiddlewareChain) -> dict:
     last_msg = state["messages"][-1]
     tool_map = {t.name: t for t in ALL_TOOLS}
     tool_results = []
+    phase_start = time.time()
 
     for tc in last_msg.tool_calls:
         tool_name = tc["name"]
@@ -209,6 +231,7 @@ def _execute_tools(state: AgentState, chain: MiddlewareChain) -> dict:
             continue
 
         logger.info("执行工具: %s", tool_name)
+        record_tool_call()
 
         # 带错误处理地执行
         handler = ToolErrorHandler(tool_name)
@@ -228,6 +251,7 @@ def _execute_tools(state: AgentState, chain: MiddlewareChain) -> dict:
             tool_call_id=tool_call_id,
         ))
 
+    record_phase("tools", phase_start)
     return {"messages": tool_results}
 
 
@@ -268,6 +292,7 @@ def _dedup_findings(findings: list[Finding]) -> list[Finding]:
 
 def _finalize(state: AgentState) -> dict:
     """从最后一条 AIMessage 的 content 中解析 LLM 审查结果，构建 ReviewReport。"""
+    phase_start = time.time()
     det_findings = state.get("deterministic_findings", [])
     llm_findings: list[Finding] = []
 
@@ -327,6 +352,8 @@ def _finalize(state: AgentState) -> dict:
     )
 
     logger.info("报告生成完成: verdict=%s, %d 条发现", verdict.value, len(all_findings))
+    record_phase("finalize", phase_start)
+    finalize_metrics()
     return {"report": report.model_dump()}
 
 
@@ -407,12 +434,16 @@ def build_graph(model_name: str = "DeepSeek-V4-Flash", temperature: float = 0.1)
     # 否则 MiddlewareContext 可能在并发 invoke 间产生竞态。
     def prepare_with_reset(state: AgentState) -> dict:
         chain.reset()
-        return _prepare_review(state)
+        init_metrics()
+        phase_start = time.time()
+        result = _prepare_review(state)
+        record_phase("prepare", phase_start)
+        return result
 
     graph = StateGraph(AgentState)
 
     graph.add_node("prepare", prepare_with_reset)
-    graph.add_node("llm", _make_llm_node(llm, chain))
+    graph.add_node("llm", _make_llm_node(llm, chain, model_name))
     graph.add_node("tools", lambda s: _execute_tools(s, chain))
     graph.add_node("finalize", _finalize)
 

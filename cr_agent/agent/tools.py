@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -69,6 +68,9 @@ def read_file(path: str, max_lines: int = 200) -> str:
     """
     from cr_agent.security.sanitizer import validate_path
 
+    # 强制上限，防止 LLM 传入大值绕过 token 预算保护
+    max_lines = min(max(int(max_lines), 1), 500)
+
     try:
         safe_path = validate_path(path)
         p = Path(safe_path)
@@ -84,50 +86,37 @@ def read_file(path: str, max_lines: int = 200) -> str:
 
 
 @tool
-def generate_report(
-    verdict: str,
-    summary: str,
-    findings: str,
-    files_reviewed: int = 0,
-    lines_added: int = 0,
-    lines_removed: int = 0,
-) -> str:
-    """生成最终的代码审查报告。
+def search_code(pattern: str, file_glob: str = "") -> str:
+    """在代码库中搜索匹配指定模式的行。
 
-    当你完成分析后调用此工具。
+    使用正则表达式搜索文件内容，返回匹配行及上下文。
+    适用于查找函数调用、变量使用、import 关系等。
 
     Args:
-        verdict: 审查结论，取值为 "approve"、"request_changes" 或 "block"。
-        summary: 1-3 句话的审查概述。
-        findings: finding 对象的 JSON 数组。每个 finding 包含：
-            rule_id (str), severity (blocker/major/minor/info), file (str),
-            line (int), message (str), suggestion (str), confidence (high/medium/low)。
-        files_reviewed: 审查的文件数量。
-        lines_added: diff 中新增的行数。
-        lines_removed: diff 中删除的行数。
+        pattern: 正则表达式模式（如 "def login"、"import os"）。
+        file_glob: 文件名过滤通配符（如 "*.py"），留空搜索所有文件。
     """
-    # 实际的报告构建在处理此工具调用的 graph 节点中进行。
-    # 这里只是校验并透传。
-    try:
-        parsed_findings = json.loads(findings) if isinstance(findings, str) else findings
-    except json.JSONDecodeError:
-        parsed_findings = []
+    from cr_agent.sandbox.executor import SandboxConfig, run_command
 
-    report = {
-        "verdict": verdict,
-        "summary": summary,
-        "findings": parsed_findings,
-        "metrics": {
-            "files_reviewed": files_reviewed,
-            "lines_added": lines_added,
-            "lines_removed": lines_removed,
-        },
-    }
-    return json.dumps(report, ensure_ascii=False)
+    # 构造安全的 grep 命令
+    cmd_parts = ["grep", "-rn", "--include=" + file_glob if file_glob else "--include=*", pattern, "."]
+    cmd = " ".join(cmd_parts)
+
+    try:
+        exit_code, output = run_command(cmd, cwd=".", config=SandboxConfig(max_output_chars=8000))
+    except Exception as e:
+        return f"Search error: {type(e).__name__}: {e}"
+
+    if exit_code == 0:
+        return f"Search results:\n{output}" if output.strip() else "No matches found."
+    elif exit_code == 1:
+        return "No matches found."
+    else:
+        return f"Search failed (exit {exit_code}):\n{output}"
 
 
 # 暴露给 LLM 的工具列表
-# 注意：generate_report 不再是工具，LLM 在分析完成后直接在回复中输出结构化 JSON，
+# LLM 在分析完成后直接在回复中输出结构化 JSON，
 # finalize 节点解析最后一条 AIMessage 的 content 提取 findings。
 # verdict 由代码根据 findings 严重度自动判定，LLM 不需要也不应该传 verdict。
-ALL_TOOLS = [run_lint, read_file]
+ALL_TOOLS = [run_lint, read_file, search_code]
