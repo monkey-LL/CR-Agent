@@ -278,7 +278,7 @@ python -m cr_agent.core.contracts
 > "我做了一个 AI Code Review Agent，用 LangGraph 状态机编排，6 层中间件链管理工具调用循环。
 >
 > 架构分三层：
-> - 确定性规则引擎：8 条正则秒出安全问题
+> - 确定性规则引擎：30 条正则秒出安全问题
 > - LLM 语义审查：通过条件边实现工具调用循环
 > - 安全防护：prompt injection 中和、secret 脱敏、环境变量隔离
 >
@@ -291,7 +291,7 @@ python -m cr_agent.core.contracts
 > - Trace ID 链路追踪：全链路日志可按 trace_id 过滤
 > - 记忆系统：历史审查结果注入下次审查的 prompt
 >
-> 56 个单元测试覆盖全部核心模块。"
+> 316 个单元测试覆盖全部核心模块，45 例评测集实测注入成功率 0%。"
 
 ### 高频面试题清单（进阶 20 题）
 
@@ -434,12 +434,15 @@ path 场景。
 6. 实现幂等性 + 并发控制：(repo, pr) 级别去重，TTL 300s，max 3 并发
 7. 实现 Trace ID 链路追踪：ContextVar 注入 structlog，全链路可追踪
 8. 实现环境变量脱敏：subprocess 白名单制，KEY/TOKEN/SECRET redacted
-9. 实现记忆系统：历史审查 findings 存 JSON，注入下次审查 prompt
+9. 实现记忆系统：历史审查 findings 存 SQLite（90 天保留期），聚合
+   blocker/major 高频模式注入下次审查 prompt
 10. 导出 4 个 JSON Schema 契约，跨组件数据流有契约保证
-11. 56 个单元测试覆盖中间件、幂等性、安全防护、熔断器等
+11. 316 个单元测试覆盖中间件、幂等性、安全防护、熔断器等
+12. 构建 45 例评测集（golden/对抗/注入/良性），LLM-as-judge 评 soft 维度
 
 项目成果：
 - 确定性检查 < 0.1s，LLM 审查约 40s
 - 6 层中间件处理 11 个 unhappy path 场景
-- 56 个单元测试全部通过
+- 316 个单元测试全部通过
+- 评测实测：注入成功率 0%、幻觉率 0%、Recall 97.6%、Verdict 准确率 91.7%
 ```

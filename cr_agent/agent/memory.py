@@ -46,6 +46,7 @@ def _get_db() -> sqlite3.Connection:
             findings_count INTEGER DEFAULT 0,
             finding_types TEXT,  -- JSON 数组
             severities TEXT,     -- JSON 数组
+            finding_files TEXT,  -- JSON 数组，finding 涉及的文件路径
             reviewed_at TEXT NOT NULL,
             trace_id TEXT
         )
@@ -59,6 +60,11 @@ def _get_db() -> sqlite3.Connection:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON reviews(reviewed_at)
     """)
+    # 迁移：如果表已存在但缺少 finding_files 列，添加它
+    try:
+        conn.execute("SELECT finding_files FROM reviews LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE reviews ADD COLUMN finding_files TEXT")
     conn.commit()
     return conn
 
@@ -70,17 +76,19 @@ def save_review_memory(repo: str, pr_number: int, findings: list[dict], verdict:
     """
     finding_types = [f.get("rule_id", "unknown") for f in findings]
     severities = [f.get("severity", "info") for f in findings]
+    finding_files = list({f.get("file", "") for f in findings if f.get("file")})
 
     with _db_lock:
         conn = _get_db()
         try:
             conn.execute(
                 """INSERT INTO reviews (repo, pr_number, verdict, findings_count,
-                   finding_types, severities, reviewed_at, trace_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   finding_types, severities, finding_files, reviewed_at, trace_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     repo, pr_number, verdict, len(findings),
                     json.dumps(finding_types), json.dumps(severities),
+                    json.dumps(finding_files),
                     datetime.now().isoformat(), trace_id,
                 ),
             )
@@ -195,6 +203,80 @@ def build_memory_context(repo: str) -> str:
             f"Last review ({last_date}): {last_findings} findings, verdict={last_verdict}.",
         ]
         return "\n".join(p for p in parts if p) + "\n"
+
+
+def build_file_memory_context(repo: str, diff_files: list[str]) -> str:
+    """按当前 diff 涉及的文件路径检索历史审查记录，构建相关上下文。
+
+    与 build_memory_context 的区别：后者注入仓库级统计摘要（泛化），
+    本函数只检索涉及相同文件的历史审查（精准），避免锚定偏误。
+
+    示例输出：
+      "## File-Specific Memory
+       auth.py: 3 past reviews, last verdict=block (2026-08-20), issues: sql-injection(2x), hardcoded-secret(1x)
+       models/user.py: 1 past review, verdict=approve, no issues"
+    """
+    if not diff_files:
+        return ""
+
+    with _db_lock:
+        conn = _get_db()
+        try:
+            cursor = conn.execute(
+                "SELECT finding_files, finding_types, severities, verdict, findings_count, reviewed_at "
+                "FROM reviews WHERE repo = ? ORDER BY reviewed_at DESC LIMIT 100",
+                (repo,),
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return ""
+
+        # 按文件聚合历史审查信息
+        file_history: dict[str, list[dict]] = {}
+        for row in rows:
+            stored_files = json.loads(row[0]) if row[0] else []
+            stored_types = json.loads(row[1]) if row[1] else []
+            stored_sevs = json.loads(row[2]) if row[2] else []
+            verdict = row[3] or "unknown"
+            findings_count = row[4] or 0
+            reviewed_at = (row[5] or "")[:10]
+
+            for sf in stored_files:
+                if sf in diff_files:
+                    if sf not in file_history:
+                        file_history[sf] = []
+                    file_history[sf].append({
+                        "verdict": verdict,
+                        "findings_count": findings_count,
+                        "types": stored_types,
+                        "severities": stored_sevs,
+                        "date": reviewed_at,
+                    })
+
+        if not file_history:
+            return ""
+
+        lines = ["\n## File-Specific Memory"]
+        for filepath, reviews in sorted(file_history.items()):
+            review_count = len(reviews)
+            latest = reviews[0]
+            # 统计该文件历史中出现的 high-severity 问题类型
+            pattern_counts: Counter = Counter()
+            for r in reviews:
+                for ft, sev in zip(r["types"], r["severities"]):
+                    if sev in ("blocker", "major"):
+                        pattern_counts[ft] += 1
+            top = pattern_counts.most_common(3)
+            issues_text = ", ".join(f"{name}({count}x)" for name, count in top) if top else "no high-severity issues"
+            lines.append(
+                f"- {filepath}: {review_count} past review(s), "
+                f"last verdict={latest['verdict']} ({latest['date']}), "
+                f"issues: {issues_text}"
+            )
+        return "\n".join(lines) + "\n"
 
 
 def cleanup_old_reviews(retention_days: int = DEFAULT_RETENTION_DAYS) -> int:

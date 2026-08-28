@@ -45,3 +45,7 @@ class AgentState(TypedDict):
     iteration: int
     memory_context: str
     forced_finalize: bool
+    diff_metrics: dict
+    diff_truncated: bool
+    reviewed_files: list
+    unreviewed_files: list

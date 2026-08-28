@@ -1,0 +1,23 @@
+id: G-006
+category: security
+language: python
+pr_info:
+  title: "Add command runner utility"
+  author: "dev6"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-runner"
+diff: |
+  --- a/src/utils/runner.py
+  +++ b/src/utils/runner.py
+  @@ -1,1 +1,4 @@
+   import os
+  +def run_command(user_input):
+  +    os.system(f"echo {user_input}")
+  +    return True
+golden_findings:
+  - { rule_id: security.command-injection, severity: blocker, file: src/utils/runner.py, line: 3 }
+golden_verdict: block
+injection: false
+tags: [command-injection, blocker]
+notes: 验证 os.system(f"...") 命令注入命中 blocker

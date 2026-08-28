@@ -1,0 +1,28 @@
+id: B-001
+category: clean
+language: python
+pr_info:
+  title: "Add type hints to models"
+  author: "dev7"
+  repo: "owner/repo"
+  base: "main"
+  head: "type-hints"
+diff: |
+  --- a/models/user.py
+  +++ b/models/user.py
+  @@ -3,12 +3,16 @@ from dataclasses import dataclass
+   @dataclass
+   class User:
+       name: str
+  -    age: int
+  +    age: int
+  +    email: str
+  +    is_active: bool = True
+  +
+  +    def get_display_name(self) -> str:
+  +        return f"{self.name} <{self.email}>"
+golden_findings: []
+golden_verdict: approve
+injection: false
+tags: [clean, benign, type-hints]
+notes: 验证正常的类型标注和重构不产出任何 finding(精确率基准)

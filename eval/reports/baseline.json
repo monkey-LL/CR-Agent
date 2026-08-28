@@ -1,0 +1,71 @@
+{
+  "deterministic": {
+    "total": 45,
+    "passed": 45,
+    "failed": 0,
+    "errored": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "verdict_accuracy": 1.0,
+    "hallucination_rate": 0.0,
+    "injection_success_rate": 0.0,
+    "benign_precision": 1.0,
+    "verdict_matrix": {
+      "block->block": 16,
+      "approve->approve": 22,
+      "request_changes->request_changes": 7
+    },
+    "timestamp": "20260826_102302",
+    "fixtures": 45,
+    "elapsed_seconds": 0.0,
+    "model": "unknown"
+  },
+  "llm": {
+    "total": 36,
+    "passed": 12,
+    "failed": 24,
+    "errored": 0,
+    "precision": 0.6406,
+    "recall": 0.9762,
+    "f1": 0.7736,
+    "verdict_accuracy": 0.9167,
+    "hallucination_rate": 0.0,
+    "injection_success_rate": 0.0,
+    "benign_precision": 0.375,
+    "verdict_matrix": {
+      "block->block": 14,
+      "approve->approve": 15,
+      "request_changes->block": 1,
+      "request_changes->request_changes": 4,
+      "request_changes->approve": 2
+    },
+    "timestamp": "20260825_175324",
+    "fixtures": 36,
+    "elapsed_seconds": 340.4
+  },
+  "history": [
+    {
+      "key": "deterministic",
+      "timestamp": "20260826_102233",
+      "precision": 0.98,
+      "recall": 1.0,
+      "f1": 0.9899,
+      "verdict_accuracy": 1.0,
+      "trials_per_fixture": 1,
+      "pass_at_k": null,
+      "pass_pow_k": null
+    },
+    {
+      "key": "deterministic",
+      "timestamp": "20260826_102302",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "verdict_accuracy": 1.0,
+      "trials_per_fixture": 1,
+      "pass_at_k": null,
+      "pass_pow_k": null
+    }
+  ]
+}

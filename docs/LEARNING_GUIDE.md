@@ -10,11 +10,13 @@ cr_agent/
 ├── core/               # 核心引擎（不依赖 LLM，纯逻辑）
 │   ├── models.py           # 数据模型：Finding, Severity, Verdict, Report
 │   ├── diff_parser.py      # Unified diff 解析器：hunk、行号、变更统计
-│   └── rules_engine.py     # 确定性规则引擎：8 条正则安全规则
+│   └── rules_engine.py     # 确定性规则引擎：30 条正则规则
 ├── agent/              # Agent 编排（LangGraph 状态机）
 │   ├── state.py            # 状态定义（TypedDict + reducer）
 │   ├── prompts.py          # System prompt + 审查触发 prompt
-│   ├── tools.py            # 3 个工具：run_lint, read_file, generate_report
+│   ├── tools.py            # 2 个工具：run_lint, read_file
+│   ├── memory.py           # SQLite 审查记忆（仓库级经验积累）
+│   ├── middlewares/        # 6 层中间件链
 │   └── graph.py            # 状态机：prepare → llm ↔ tools → finalize
 ├── web/                # Web UI（FastAPI + 单 HTML）
 │   ├── server.py           # API 端点 + 静态页面服务
@@ -45,8 +47,8 @@ cr_agent/
 ### 第 1 步：启动 Web UI 体验
 
 ```bash
-export PYTHONPATH="/Users/monkeyll/CRagent"
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m uvicorn cr_agent.web.server:app --port 8088
+./start.sh web
+# 或: python -m uvicorn cr_agent.web.server:app --port 8088
 ```
 
 打开 http://localhost:8088，点「Load Sample」→「Review」，秒出 5 个安全问题。
@@ -60,7 +62,7 @@ export PYTHONPATH="/Users/monkeyll/CRagent"
 - Unified diff 格式是什么？如何用正则解析？
 - 为什么先做确定性检查（正则），再交给 LLM？
 - Severity 分级（blocker/major/minor/info）和 Verdict 决策逻辑
-- 8 条安全规则的设计：hardcoded secret、SQL injection、eval、command injection 等
+- 30 条规则的设计：hardcoded secret、SQL injection、eval、command injection 等
 
 ```bash
 # 只运行确定性检查
@@ -140,20 +142,17 @@ START → prepare → llm → [has_tool_calls?]
 ## 快速开始
 
 ```bash
-# 1. 设置环境
-export PYTHONPATH="/Users/monkeyll/CRagent"
+# 1. 启动 Web UI
+./start.sh web
 
-# 2. 启动 Web UI
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m uvicorn cr_agent.web.server:app --port 8088
+# 2. 运行测试
+./start.sh test
 
-# 3. 运行测试
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m pytest tests/ -v
-
-# 4. CLI 确定性检查（免费）
+# 3. CLI 确定性检查（免费）
 echo '--- a/f.py
 +++ b/f.py
 @@ -1,1 +1,2 @@
-+eval(x)' | /Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m cr_agent --diff-stdin --no-llm
++eval(x)' | python -m cr_agent --diff-stdin --no-llm
 ```
 
 ## 核心概念速查

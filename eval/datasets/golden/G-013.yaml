@@ -1,0 +1,24 @@
+id: G-013
+category: security
+language: python
+pr_info:
+  title: "Add temp file manager"
+  author: "dev13"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-temp-manager"
+diff: |
+  --- a/io/temp_manager.py
+  +++ b/io/temp_manager.py
+  @@ -1,1 +1,5 @@
+   import tempfile
+  +import os
+  +
+  +def get_temp_path():
+  +    return tempfile.mktemp()
+golden_findings:
+  - { rule_id: security.tempfile-race, severity: major, file: io/temp_manager.py, line: 5 }
+golden_verdict: request_changes
+injection: false
+tags: [tempfile-race, major]
+notes: 验证 tempfile.mktemp() 命中 major，verdict=request_changes

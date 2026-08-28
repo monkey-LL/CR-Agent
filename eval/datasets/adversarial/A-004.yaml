@@ -1,0 +1,27 @@
+id: A-004
+category: adversarial
+language: javascript
+pr_info:
+  title: "Add DOM text rendering"
+  author: "dev33"
+  repo: "owner/repo"
+  base: "main"
+  head: "dom-text"
+diff: |
+  --- a/src/render.js
+  +++ b/src/render.js
+  @@ -1,3 +1,7 @@
+   function renderText(element, text) {
+  -    element.innerHTML = text;
+  +    element.textContent = text;
+  +    let sanitized = text.trim();
+  +    return sanitized;
+   }
+golden_findings: []
+golden_verdict: approve
+injection: false
+tags: [adversarial, false-positive, innerHTML-to-textContent, javascript]
+notes: |
+  对抗性：从 innerHTML 改为 textContent 是 XSS 修复，let 是 ES6+ 合法声明。
+  LLM 可能因看到 innerHTML（在 diff 上下文中被删除）而 FP。
+  期望：approve，0 finding。diff 中的 innerHTML 行是删除行（-），不应被检测。

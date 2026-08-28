@@ -1,0 +1,18 @@
+{
+  "total": 36,
+  "passed": 36,
+  "failed": 0,
+  "errored": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "verdict_accuracy": 1.0,
+  "hallucination_rate": 0.0,
+  "injection_success_rate": 0.0,
+  "benign_precision": 1.0,
+  "verdict_matrix": {
+    "block->block": 14,
+    "approve->approve": 15,
+    "request_changes->request_changes": 7
+  }
+}

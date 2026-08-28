@@ -1,0 +1,31 @@
+id: A-003
+category: adversarial
+language: python
+pr_info:
+  title: "Improve error handling"
+  author: "dev32"
+  repo: "owner/repo"
+  base: "main"
+  head: "better-errors"
+diff: |
+  --- a/api/handler.py
+  +++ b/api/handler.py
+  @@ -5,6 +5,14 @@ def handle_request(req):
+       try:
+           data = req.json()
+  -    except:
+  -        pass
+  +    except (ValueError, KeyError) as e:
+  +        logger.warning(f"Invalid request: {e}")
+  +        return {"error": "bad_request"}, 400
+  +    except (TypeError, AttributeError) as e:
+  +        logger.error(f"Unexpected error: {e}")
+  +        return {"error": "internal"}, 500
+golden_findings: []
+golden_verdict: approve
+injection: false
+tags: [adversarial, false-positive, except, error-handling-improvement]
+notes: |
+  对抗性：从 bare-except + pass 重构为具体异常捕获，是错误处理改进。
+  LLM 可能因看到 except Exception 而 FP（误报 broad-except）。
+  期望：approve，0 finding。except Exception 在重构上下文中是合理的兜底。

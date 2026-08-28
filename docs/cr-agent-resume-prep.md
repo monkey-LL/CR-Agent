@@ -4,23 +4,27 @@
 
 ### 项目描述（建议 1 行）
 
-> 基于 LangGraph 的自动化 AI 代码审查 Agent，在 GitHub PR 提交后自动触发审查，采用确定性规则 + LLM 双层审查架构，具备生产级安全防护和可靠性工程。
+> 基于 LangGraph 的自动化 AI 代码审查 Agent，在 GitHub PR 提交后自动触发审查，采用确定性规则 + LLM 双层审查架构，配套 45 例标注评测集（含对抗/注入样本）验证审查质量，具备生产级安全防护和可靠性工程。
 
 ### 简历要点（建议 5-6 条，挑你能讲清楚的）
 
 ```
 CR Agent — AI 代码审查 Agent
-技术栈: Python / LangGraph / FastAPI / Pydantic v2 / Redis / structlog
+技术栈: Python / LangGraph / FastAPI / Pydantic v2 / Redis / SQLite / structlog
 
-- 设计确定性规则 + LLM 双层审查架构，28 条正则规则覆盖 6 类安全问题，
-  LLM Agent 聚焦语义分析（逻辑错误/并发安全/API 兼容性），避免纯 LLM 方案的高成本和幻觉问题
+- 构建 Agent 评测体系：45 例标注 fixture 覆盖 golden/对抗/注入/良性四类，
+  指标含 P/R/F1、verdict 混淆矩阵、幻觉率、注入成功率；实测注入成功率 0%、
+  幻觉率 0%、Recall 97.6%、Verdict 准确率 91.7%
+- 设计确定性规则 + LLM 双层审查架构，30 条正则规则零成本兜底安全问题，
+  LLM Agent 聚焦语义分析（逻辑错误/并发安全/API 兼容性）；审查结论由代码
+  按发现来源加权判定——LLM 单条 blocker 不直接拦截（防假阳性）
 - 实现 6 层中间件链（输入净化/上下文压缩/循环检测/错误降级/输出截断/Token 预算），
   解决 LLM Agent 生产环境中的循环调用、Token 爆炸、工具失败、上下文膨胀等问题
 - 构建 5 层安全纵深防御（Prompt Injection 中和/Secret 脱敏/路径校验/环境变量隔离/沙箱执行），
-  防止 PR 内容中的注入攻击和密钥泄露
+  防止 PR 内容中的注入攻击和密钥泄露，注入集实测攻击成功率 0%
 - 基于 LangGraph 实现 4 节点状态机（prepare→llm⇄tools→finalize），支持工具调用循环 + 条件路由
 - 实现双后端幂等性控制（内存 + Redis SET NX 原子锁），集成熔断器（三态状态机）和指数退避重试
-- 156 个单元测试覆盖核心模块，包含沙箱安全、中间件链、幂等性等生产场景
+- 316 个单元测试覆盖核心模块，包含沙箱安全、中间件链、幂等性等生产场景
 ```
 
 ### 写法原则
@@ -28,7 +32,7 @@ CR Agent — AI 代码审查 Agent
 - 每条以动词开头（设计/实现/构建），不要写"参与"或"协助"
 - 每条必须包含**做了什么 + 为什么这么做 + 技术关键词**
 - 每条都要能展开讲 3-5 分钟，讲不清楚的不要写
-- 数字要准确：28 条规则、6 层中间件、5 层防御、156 个测试
+- 数字要准确：30 条规则、6 层中间件、5 层防御、316 个测试、45 例评测集
 
 ---
 
@@ -39,9 +43,9 @@ CR Agent — AI 代码审查 Agent
 **核心问题**：纯 LLM 审查成本高、有幻觉、不稳定；纯正则审查无法理解语义。
 
 **解决方案**：
-- Layer 1（确定性规则）：28 条正则，零成本零幻觉，覆盖安全漏洞（SQL 注入/硬编码密钥/eval）、调试残留（breakpoint/print）、异常处理（bare except）、可维护性（可变默认参数/global）
+- Layer 1（确定性规则）：30 条正则，零成本零幻觉，覆盖安全漏洞（SQL 注入/硬编码密钥/eval）、调试残留（breakpoint/print）、异常处理（bare except）、可维护性（可变默认参数/global）、JS/TS 专用规则（innerHTML/var 声明）
 - Layer 2（LLM Agent）：接收 Layer 1 发现作为起点，聚焦正则无法捕获的语义问题（逻辑错误/边界条件/竞态条件/N+1 查询/API 破坏性改动）
-- 合并策略：按 severity 排序（blocker→major→minor→info），verdict 由最高严重度决定
+- 合并策略：按 severity 排序（blocker→major→minor→info），verdict 由代码按发现来源加权判定（见亮点 1）
 
 **为什么值得学**：这是"混合架构"的经典案例——不是"全用 LLM"或"全用规则"，而是让每个组件做自己擅长的事。这种思路在 RAG、推荐系统、风控等领域都适用。
 
@@ -99,7 +103,7 @@ START → prepare → llm ⇄ tools → finalize → END
 - `prepare`：diff 解析 + 确定性检查 + prompt 构建 + 中间件重置
 - `llm`：LLM 决策节点，绑定工具调用，受中间件链包裹
 - `tools`：工具执行节点，带 before/after 中间件 + 错误降级
-- `finalize`：从对话历史提取 generate_report 参数，合并发现，生成 ReviewReport
+- `finalize`：从最后一条 AIMessage 的 content 解析 JSON findings，合并确定性发现，生成 ReviewReport
 
 **State 设计**：TypedDict + `Annotated[list, operator.add]` reducer，messages/findings 追加式合并而非覆盖。
 
@@ -129,13 +133,13 @@ START → prepare → llm ⇄ tools → finalize → END
 #### Q1: 为什么用确定性规则 + LLM 双层，而不是纯 LLM？
 
 **答**：三个原因：
-1. **成本**：正则规则零 API 调用成本，28 条规则覆盖高频问题（SQL 注入、硬编码密钥、eval 等），纯 LLM 每次审查消耗 50K+ token
+1. **成本**：正则规则零 API 调用成本，30 条规则覆盖高频问题（SQL 注入、硬编码密钥、eval 等），纯 LLM 每次审查消耗 50K+ token
 2. **可靠性**：正则规则零幻觉、零延迟、结果确定，纯 LLM 有幻觉和不稳定性
-3. **互补性**：正则擅长模式匹配（语法层面），LLM 擅长语义理解（逻辑层面）。合并时按 severity 排序，verdict 由最高严重度决定（blocker → block，major → request_changes）
+3. **互补性**：正则擅长模式匹配（语法层面），LLM 擅长语义理解（逻辑层面）。合并时按 severity 排序，verdict 由代码按发现来源加权判定：确定性 blocker 1 条即 BLOCK，LLM blocker 需 ≥2 条才 BLOCK（防 LLM 假阳性直接拦截 PR）
 
 #### Q2: 双层架构的合并逻辑是什么？
 
-**答**：`_finalize` 节点从对话历史中提取 LLM 的 `generate_report` 工具调用参数，与确定性发现合并为 `all_findings = det_findings + llm_findings`。`determine_verdict()` 按最高严重度判定：有 blocker → block，有 major → request_changes，其余 → approve。
+**答**：`_finalize` 节点从最后一条 AIMessage 的 content 中解析 LLM 输出的 JSON findings（正则提取 ```json 代码块或裸 JSON），与确定性发现合并为 `all_findings = det_findings + llm_findings`（先去重）。`determine_verdict()` 按发现来源加权判定：确定性 blocker 1 条 → BLOCK；LLM blocker 需 ≥2 条 → BLOCK；确定性 major 1 条 → REQUEST_CHANGES；LLM major 需 ≥2 条 → REQUEST_CHANGES；否则 approve。来源加权的原因：LLM 有假阳性，单条 LLM blocker 不应直接拦截 PR。
 
 #### Q3: LangGraph 状态机的 4 个节点分别做什么？条件边怎么路由？
 
@@ -143,7 +147,7 @@ START → prepare → llm ⇄ tools → finalize → END
 - `prepare`：入口节点，执行 diff 解析 + 确定性检查 + prompt 构建 + 中间件链 reset
 - `llm`：调用 LLM（绑定工具），受 before_model/after_model 中间件包裹
 - `tools`：执行 LLM 请求的工具调用，受 before_tool/after_tool 中间件包裹
-- `finalize`：从对话历史提取 generate_report 参数，合并发现，生成报告
+- `finalize`：从最后一条 AIMessage 的 content 中解析 JSON findings，合并发现，生成 ReviewReport
 
 条件边 `_should_continue`：检查最后一条消息是否有 tool_calls，有 → 走 tools，无 → 走 finalize。
 
@@ -202,7 +206,7 @@ START → prepare → llm ⇄ tools → finalize → END
 
 #### Q11: Secret 脱敏覆盖了哪些模式？双向是什么意思？
 
-**答**：6 种模式：sk-（OpenAI）、AKIA（AWS）、ghp_（GitHub PAT）、github_pat_、通用 key=value、Bearer token。
+**答**：10+ 种模式：sk-（OpenAI）、AKIA（AWS）、ghp_（GitHub PAT）、github_pat_（GitHub fine-grained）、glpat-（GitLab）、xox[baprs]-（Slack）、sk_live_（Stripe）、JWT（eyJ 三段式）、PEM 私钥块、通用 key=value、Bearer token。
 
 "双向"指：
 - 输入方向（sanitize_input）：diff/PR 描述进入 LLM 前净化
@@ -278,10 +282,11 @@ open 状态下所有请求立即抛 `CircuitBreakerOpenError`，不再调用后�
 
 #### Q20: Agent 有哪些工具？工具设计原则是什么？
 
-**答**：3 个工具：
+**答**：2 个工具：
 - `run_lint`：在沙箱中执行 lint/type-check 命令
 - `read_file`：读取文件完整内容（路径校验 + max_lines=200 防爆）
-- `generate_report`：生成最终审查报告（LLM 调用此工具表示审查完成）
+
+注意：`generate_report` 已从工具列表移除。现在的设计是 LLM 完成分析后在回复中直接输出结构化 JSON，`_finalize` 节点解析最后一条 AIMessage 提取 findings，verdict 由代码自动判定（LLM 不需要也不应该输出 verdict）。
 
 设计原则：
 1. 工具 docstring 是 LLM 看到的描述，必须清晰具体
@@ -289,9 +294,9 @@ open 状态下所有请求立即抛 `CircuitBreakerOpenError`，不再调用后�
 3. 工具输出有大小限制（防 token 爆炸）
 4. 安全敏感工具（read_file）有路径校验
 
-#### Q21: generate_report 的数据怎么从 LLM 流到最终报告的？
+#### Q21: LLM 的审查结果怎么从回复流到最终报告的？
 
-**答**：LLM 调用 `generate_report(verdict, summary, findings, ...)` → 工具校验 JSON 并透传 → `_finalize` 节点从对话历史中逆向查找最后一个 `generate_report` 工具调用 → 解析参数（findings 可能是 JSON 字符串）→ 逐条构建 Finding 对象（容错：格式错误的跳过）→ 合并确定性发现 → `determine_verdict()` 判定 → 构建 ReviewReport。
+**答**：LLM 完成分析后在最后一条回复中输出 JSON（summary + findings）→ `_finalize` 节点找到最后一条 AIMessage → 正则提取 JSON（先找 ```json 代码块，再找裸 `{...}`）→ `json.loads` 解析 → 逐条构建 Finding 对象（容错：格式错误的跳过并记录 warning）→ 与确定性发现合并（去重）→ `determine_verdict()` 按来源加权判定 → 构建 ReviewReport。解析失败时降级：只保留确定性发现，不崩溃。
 
 ---
 
@@ -317,10 +322,14 @@ source 字段区分 "deterministic"（正则）和 "llm"（LLM），方便追溯
 
 #### Q24: verdict 判定逻辑是什么？
 
-**答**：`determine_verdict(findings)` 遍历所有发现：
-- 有 BLOCKER → `BLOCK`（合并前必须修复）
-- 有 MAJOR → `REQUEST_CHANGES`（应该修复）
+**答**：`determine_verdict(findings)` 按发现来源加权判定：
+- 确定性来源 BLOCKER 1 条 → `BLOCK`（确定性发现可信度高，1 条即触发）
+- LLM 来源 BLOCKER 需 ≥2 条 → `BLOCK`（LLM 有假阳性，单条不足以拦截）
+- 确定性来源 MAJOR 1 条 → `REQUEST_CHANGES`
+- LLM 来源 MAJOR 需 ≥2 条 → `REQUEST_CHANGES`
 - 只有 MINOR/INFO → `APPROVE`
+
+设计原因：verdict 判定权在代码不在 LLM，LLM 不需要也不应该输出 verdict。
 
 ---
 
@@ -338,7 +347,7 @@ source 字段区分 "deterministic"（正则）和 "llm"（LLM），方便追溯
 
 #### Q26: 审查记忆系统怎么工作的？
 
-**答**：SQLite 存储每次审查的 repo、pr_number、finding 类型、severities、verdict、trace_id。`build_memory_context(repo)` 聚合仓库历史审查数据，生成 Top-N 高频问题模式 + 统计摘要（总审查数、blocker 率、高频 rule_id），注入到 LLM prompt 中让 Agent 优先关注反复出现的问题。JSON 文件作为向后兼容回退。
+**答**：SQLite 存储每次审查的 repo、pr_number、finding 类型、severities、verdict、trace_id。`build_memory_context(repo)` 聚合仓库历史审查数据，只统计 blocker/major 级别的 Top-N 高频问题模式（避免误报强化确认偏误）+ 统计摘要（总审查数、severity 分布、最近一次审查结果），注入到 LLM prompt 中让 Agent 优先关注反复出现的问题。带 90 天保留期自动清理。
 
 #### Q27: 三种运行模式（Web/Webhook/CLI）共享什么？
 

@@ -58,12 +58,27 @@ def _prepare_review(state: AgentState) -> dict:
     max_diff_chars = 50_000
     diff_truncated = False
     if len(diff) > max_diff_chars:
-        diff = diff[:max_diff_chars]
         diff_truncated = True
+
+    # 在截断前计算 metrics，避免截断落在 hunk 中间导致统计错误
+    full_hunks = parse_diff(diff)
+    files_changed, lines_added, lines_removed = compute_metrics(full_hunks)
+    diff_metrics = {
+        "files_changed": files_changed,
+        "lines_added": lines_added,
+        "lines_removed": lines_removed,
+    }
+
+    if diff_truncated:
+        diff = diff[:max_diff_chars]
 
     hunks = parse_diff(diff)
     det_findings = run_deterministic_checks(hunks)
-    files_changed, lines_added, lines_removed = compute_metrics(hunks)
+
+    # 计算已审查和未审查的文件清单
+    full_files = sorted({h.file for h in full_hunks if h.file})
+    reviewed_files = sorted({h.file for h in hunks if h.file})
+    unreviewed_files = sorted(set(full_files) - set(reviewed_files))
 
     safe_diff = sanitize_input(diff)
     safe_pr_info = {
@@ -71,6 +86,18 @@ def _prepare_review(state: AgentState) -> dict:
         for k, v in pr_info.items()
     }
     safe_memory = sanitize_input(memory_context) if memory_context else ""
+
+    # 按当前 diff 涉及的文件检索历史审查记录，注入精准上下文
+    diff_file_names = [h.file for h in full_hunks if h.file]
+    try:
+        from cr_agent.agent.memory import build_file_memory_context
+        file_memory = build_file_memory_context(
+            safe_pr_info.get("repo", ""), diff_file_names
+        )
+        if file_memory:
+            safe_memory += sanitize_input(file_memory)
+    except Exception as e:
+        logger.debug("File memory context failed: %s", e)
 
     user_msg = HumanMessage(
         content=build_review_prompt(safe_pr_info, safe_diff, det_findings, safe_memory)
@@ -89,6 +116,10 @@ def _prepare_review(state: AgentState) -> dict:
         "diff": diff,
         "report": None,
         "iteration": 0,
+        "diff_metrics": diff_metrics,
+        "diff_truncated": diff_truncated,
+        "reviewed_files": reviewed_files,
+        "unreviewed_files": unreviewed_files,
     }
 
 
@@ -208,6 +239,33 @@ def _should_continue(state: AgentState) -> str:
     return "finalize"
 
 
+def _dedup_findings(findings: list[Finding]) -> list[Finding]:
+    """对 findings 按 (file, line) 去重，同位置只保留 severity 最高的。
+
+    确定性 findings 优先于 LLM findings（同位置同 severity 时保留确定性来源）。
+    """
+    severity_order = {
+        Severity.BLOCKER: 0,
+        Severity.MAJOR: 1,
+        Severity.MINOR: 2,
+        Severity.INFO: 3,
+    }
+    best: dict[tuple, Finding] = {}
+    for f in findings:
+        key = (f.file, f.line)
+        if key not in best:
+            best[key] = f
+            continue
+        existing = best[key]
+        existing_rank = severity_order.get(existing.severity, 99)
+        new_rank = severity_order.get(f.severity, 99)
+        if new_rank < existing_rank:
+            best[key] = f
+        elif new_rank == existing_rank and existing.source == "llm" and f.source == "deterministic":
+            best[key] = f
+    return list(best.values())
+
+
 def _finalize(state: AgentState) -> dict:
     """从最后一条 AIMessage 的 content 中解析 LLM 审查结果，构建 ReviewReport。"""
     det_findings = state.get("deterministic_findings", [])
@@ -222,8 +280,18 @@ def _finalize(state: AgentState) -> dict:
             break
 
     all_findings = det_findings + llm_findings
-    hunks = parse_diff(state["diff"])
-    files_changed, lines_added, lines_removed = compute_metrics(hunks)
+    all_findings = _dedup_findings(all_findings)
+
+    # 优先使用 _prepare_review 在截断前算好的 metrics，避免截断后重算不准
+    diff_metrics = state.get("diff_metrics")
+    if diff_metrics:
+        files_changed = diff_metrics["files_changed"]
+        lines_added = diff_metrics["lines_added"]
+        lines_removed = diff_metrics["lines_removed"]
+    else:
+        hunks = parse_diff(state["diff"])
+        files_changed, lines_added, lines_removed = compute_metrics(hunks)
+
     verdict = determine_verdict(all_findings)
 
     if not all_findings:
@@ -241,6 +309,15 @@ def _finalize(state: AgentState) -> dict:
     forced = state.get("forced_finalize", False)
     if forced:
         summary += " ⚠️ 本次审查因 token 预算/循环检测/迭代上限提前终止，可能遗漏部分问题。"
+    if state.get("diff_truncated"):
+        unreviewed = state.get("unreviewed_files", [])
+        reviewed = state.get("reviewed_files", [])
+        summary += f" ⚠️ diff 过大已被截断，已审查 {len(reviewed)}/{len(reviewed) + len(unreviewed)} 个文件。"
+        if unreviewed:
+            files_list = ", ".join(unreviewed[:10])
+            if len(unreviewed) > 10:
+                files_list += f" 等 {len(unreviewed)} 个"
+            summary += f" 以下文件未被审查：{files_list}。建议拆分 PR 后重新审查。"
 
     report = ReviewReport(
         verdict=verdict,

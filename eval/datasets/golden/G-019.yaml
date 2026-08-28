@@ -1,0 +1,31 @@
+id: G-019
+category: quality
+language: python
+pr_info:
+  title: "Update app config"
+  author: "dev19"
+  repo: "owner/repo"
+  base: "main"
+  head: "update-config"
+diff: |
+  --- a/app/config.py
+  +++ b/app/config.py
+  @@ -0,0 +1,7 @@
+  +import typing
+  +import os.path
+  +# TODO: refactor this config loading logic before next release
+  +def get_config(config: Any) -> dict:
+  +    return {"name": "app", "version": "1.0.0", "description": "a very long description that exceeds the 120 character limit for sure because it keeps going on and on and on without stopping"}
+  +
+  +import json
+golden_findings:
+  - { rule_id: maintainability.todo-comment, severity: info, file: app/config.py, line: 3 }
+  - { rule_id: type-safety.any-annotation, severity: info, file: app/config.py, line: 4 }
+  - { rule_id: quality.long-line, severity: info, file: app/config.py, line: 5 }
+  - { rule_id: quality.unused-import-common, severity: info, file: app/config.py, line: 1 }
+  - { rule_id: quality.unused-import-common, severity: info, file: app/config.py, line: 2 }
+  - { rule_id: quality.unused-import-common, severity: info, file: app/config.py, line: 7 }
+golden_verdict: approve
+injection: false
+tags: [todo-comment, long-line, unused-import-common, any-annotation, info]
+notes: 验证 4 条 info 级规则（TODO 注释、超长行、未使用导入、Any 类型注解）同时命中，verdict=approve

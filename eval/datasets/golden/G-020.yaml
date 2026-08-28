@@ -1,0 +1,26 @@
+id: G-020
+category: security
+language: javascript
+pr_info:
+  title: "Add render module"
+  author: "dev20"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-render"
+diff: |
+  --- a/src/render.js
+  +++ b/src/render.js
+  @@ -3,3 +3,5 @@
+   function render(content) {
+  -    console.log(content);
+  +    document.write(content);
+  +    var html = content;
+  +    return html;
+   }
+golden_findings:
+  - { rule_id: security.js-document-write, severity: major, file: src/render.js, line: 4 }
+  - { rule_id: quality.js-var-declaration, severity: minor, file: src/render.js, line: 5 }
+golden_verdict: request_changes
+injection: false
+tags: [js-document-write, js-var-declaration, major, javascript]
+notes: 验证 document.write() 命中 major + var 命中 minor，有 major 但无 blocker → verdict=request_changes

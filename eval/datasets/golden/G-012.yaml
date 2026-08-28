@@ -1,0 +1,23 @@
+id: G-012
+category: security
+language: python
+pr_info:
+  title: "Add password verification"
+  author: "dev12"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-verify"
+diff: |
+  --- a/auth/verify.py
+  +++ b/auth/verify.py
+  @@ -3,2 +3,3 @@
+   def check_user(password, expected_password):
+  -    if password == expected_password:
+  +    assert password == expected_password
+  +    return True
+golden_findings:
+  - { rule_id: security.assert-sensitive, severity: major, file: auth/verify.py, line: 4 }
+golden_verdict: request_changes
+injection: false
+tags: [assert-sensitive, major]
+notes: 验证 assert password == expected_password 命中 major，verdict=request_changes

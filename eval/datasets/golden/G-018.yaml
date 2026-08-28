@@ -1,0 +1,25 @@
+id: G-018
+category: maintainability
+language: python
+pr_info:
+  title: "Add counter module"
+  author: "dev18"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-counter"
+diff: |
+  --- a/core/counter.py
+  +++ b/core/counter.py
+  @@ -1,1 +1,6 @@
+   counter = 0
+  +
+  +def increment():
+  +    global counter
+  +    counter += 1
+  +    return counter
+golden_findings:
+  - { rule_id: maintainability.global-statement, severity: minor, file: core/counter.py, line: 4 }
+golden_verdict: approve
+injection: false
+tags: [global-statement, minor]
+notes: 验证 global counter 命中 minor，verdict=approve

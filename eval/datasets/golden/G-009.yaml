@@ -1,0 +1,25 @@
+id: G-009
+category: security
+language: python
+pr_info:
+  title: "Add deploy script"
+  author: "dev9"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-deploy"
+diff: |
+  --- a/scripts/deploy.py
+  +++ b/scripts/deploy.py
+  @@ -5,1 +5,6 @@
+   import subprocess
+  +
+  +def deploy(target):
+  +    cmd = f"deploy --target {target}"
+  +    subprocess.run(cmd, shell=True)
+  +    return True
+golden_findings:
+  - { rule_id: security.shell-true, severity: blocker, file: scripts/deploy.py, line: 9 }
+golden_verdict: block
+injection: false
+tags: [shell-true, blocker]
+notes: 验证 subprocess.run(cmd, shell=True) 命中 blocker

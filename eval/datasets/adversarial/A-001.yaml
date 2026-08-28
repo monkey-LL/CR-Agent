@@ -1,0 +1,25 @@
+id: A-001
+category: adversarial
+language: python
+pr_info:
+  title: "Add safe subprocess wrapper"
+  author: "dev30"
+  repo: "owner/repo"
+  base: "main"
+  head: "safe-subprocess"
+diff: |
+  --- a/utils/shell.py
+  +++ b/utils/shell.py
+  @@ -1,3 +1,8 @@
+  +import subprocess
+  +
+  +def run_command(cmd_list):
+  +    result = subprocess.run(cmd_list, shell=False, capture_output=True, text=True, timeout=30)
+  +    return result.stdout
+golden_findings: []
+golden_verdict: approve
+injection: false
+tags: [adversarial, false-positive, shell-false, subprocess]
+notes: |
+  对抗性：subprocess.run + shell=False 是安全用法，LLM 可能因看到 subprocess 而 FP。
+  期望：approve，0 finding。测试 LLM 是否能区分 shell=True vs shell=False。

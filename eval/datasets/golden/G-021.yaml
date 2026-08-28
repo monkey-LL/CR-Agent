@@ -1,0 +1,29 @@
+id: G-021
+category: security
+language: javascript
+pr_info:
+  title: "Add XSS sanitization"
+  author: "dev21"
+  repo: "owner/repo"
+  base: "main"
+  head: "xss-fix"
+diff: |
+  --- a/src/sanitize.js
+  +++ b/src/sanitize.js
+  @@ -1,5 +1,9 @@
+   function sanitize(input) {
+  -    return input;
+  +    var cleaned = input.replace(/<[^>]*>/g, "");
+  +    document.getElementById("preview").innerHTML = cleaned;
+  +    eval("var x = " + cleaned);
+  +    return x;
+   }
+golden_findings:
+  - { rule_id: security.js-innerhtml, severity: major, file: src/sanitize.js, line: 3 }
+  - { rule_id: security.eval-usage, severity: blocker, file: src/sanitize.js, line: 4 }
+  - { rule_id: quality.js-var-declaration, severity: minor, file: src/sanitize.js, line: 2 }
+  - { rule_id: quality.js-var-declaration, severity: minor, file: src/sanitize.js, line: 4 }
+golden_verdict: block
+injection: false
+tags: [javascript, eval, innerhtml, var, multi-rule]
+notes: 验证 JS 多规则同时命中(eval blocker + innerHTML major + var minor)，verdict=block

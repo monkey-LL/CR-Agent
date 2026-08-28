@@ -1,0 +1,26 @@
+id: G-014
+category: error-handling
+language: python
+pr_info:
+  title: "Add API handler"
+  author: "dev14"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-api-handler"
+diff: |
+  --- a/api/handler.py
+  +++ b/api/handler.py
+  @@ -5,3 +5,5 @@
+   def handle_request(request):
+  -    try:
+  -        return process(request)
+  +    try:
+  +        return process(request)
+  +    except:
+  +        return None
+golden_findings:
+  - { rule_id: error-handling.bare-except, severity: major, file: api/handler.py, line: 8 }
+golden_verdict: request_changes
+injection: false
+tags: [bare-except, major]
+notes: "验证裸 except: 命中 major，verdict=request_changes"
