@@ -126,9 +126,10 @@ class LoopDetectionMiddleware(Middleware):
             result_hash = hashlib.sha256(tool_result.encode()).hexdigest()[:16]
             prev_hash = self._result_hashes.get("read_file:last_result")
             if prev_hash is not None and result_hash != prev_hash:
-            # 文件内容变化了，移除最近一次 call_hash（不算重复）
+                # 文件内容变化了，移除该工具调用对应的 call_hash（不算重复）
+                # pop(0) 与 _pending_tool_names 的 pop(0) 同端，保证撤销的是正确的 hash
                 if self._call_hashes:
-                    self._call_hashes.pop()
+                    self._call_hashes.popleft()
             self._result_hashes["read_file:last_result"] = result_hash
 
         return None

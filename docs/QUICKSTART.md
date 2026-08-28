@@ -4,23 +4,14 @@
 
 项目依赖 Python 3.11+，需要 langgraph、langchain-openai、structlog、fastapi 等库。
 
-### 方式 A：复用 deer-flow venv（推荐，零安装）
-
 ```bash
-export PYTHONPATH="/Users/monkeyll/CRagent"
-```
-
-之后所有 `python` 命令使用 `/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python`。
-
-### 方式 B：自己创建虚拟环境
-
-```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 python3 -m venv .venv
 source .venv/bin/activate
-pip install langgraph langchain-openai structlog fastapi pydantic pyyaml httpx
-export PYTHONPATH="/Users/monkeyll/CRagent"
+pip install -e ".[dev]"
 ```
+
+推荐使用 `./start.sh`（会自动设置 PYTHONPATH 并加载 `.env`）。
 
 ---
 
@@ -31,8 +22,9 @@ export PYTHONPATH="/Users/monkeyll/CRagent"
 ### 1.1 启动 Web 服务
 
 ```bash
-export PYTHONPATH="/Users/monkeyll/CRagent"
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m uvicorn cr_agent.web.server:app --port 8088
+./start.sh web
+# 或手动:
+python -m uvicorn cr_agent.web.server:app --port 8088
 ```
 
 ### 1.2 打开浏览器
@@ -51,13 +43,13 @@ export PYTHONPATH="/Users/monkeyll/CRagent"
 1. 打开 http://localhost:8088
 2. 点左上角「Load Sample」
 3. 点「Review」按钮
-4. 右侧秒出结果：5 个 findings，verdict = block
+4. 右侧秒出结果：确定性 findings + verdict
 
 ### 1.4 端口被占用？
 
 ```bash
 # 换成任意空闲端口
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m uvicorn cr_agent.web.server:app --port 9090
+python -m uvicorn cr_agent.web.server:app --port 9090
 ```
 
 ---
@@ -125,8 +117,9 @@ GitHub PR 创建时自动触发审查，结果回写到 PR 评论。
 ```bash
 export GITHUB_WEBHOOK_SECRET="your-webhook-secret"
 export OPENAI_API_KEY="sk-your-key"
-export PYTHONPATH="/Users/monkeyll/CRagent"
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python -m uvicorn cr_agent.github.webhook_server:app --port 8088
+./start.sh webhook
+# 或手动:
+python -m uvicorn cr_agent.github.webhook_server:app --port 8088
 ```
 
 ### 3.2 验证服务
@@ -155,7 +148,9 @@ curl http://localhost:8088/health
 ## 体验 4：运行测试
 
 ```bash
-# 所有测试
+# 所有测试（316 个）
+./start.sh test
+# 或:
 python -m pytest tests/ -v
 
 # 核心测试（diff 解析 + 规则引擎 + 安全防护）
@@ -167,17 +162,34 @@ python -m pytest tests/test_observability.py -v
 
 ---
 
+## 体验 5：运行评测
+
+```bash
+# 确定性层评测（无 LLM，零成本，秒级）
+python -m eval.run_eval --mode deterministic \
+  --datasets eval/datasets/golden eval/datasets/adversarial
+
+# LLM 层评测（需 API key）
+python -m eval.run_eval --mode llm \
+  --datasets eval/datasets/golden eval/datasets/injection
+```
+
+详见 [评测指南](EVAL_GUIDE.md)。
+
+---
+
 ## 命令速查
 
 | 场景 | 命令 |
 |------|------|
-| Web UI | `python -m uvicorn cr_agent.web.server:app --port 8088` |
+| Web UI | `./start.sh web` |
 | 确定性检查（免费） | `python -m cr_agent --diff-file diff.patch --no-llm` |
 | 完整 LLM 审查 | `python -m cr_agent --diff-file diff.patch --model gpt-4o-mini` |
 | 审查 GitHub PR | `python -m cr_agent --repo owner/repo --pr 42` |
 | 审查 + 回写评论 | `python -m cr_agent --repo owner/repo --pr 42 --post-comment` |
-| Webhook 服务 | `python -m uvicorn cr_agent.github.webhook_server:app --port 8088` |
-| 运行测试 | `python -m pytest tests/ -v` |
+| Webhook 服务 | `./start.sh webhook` |
+| 运行测试 | `./start.sh test` |
+| 确定性层评测 | `python -m eval.run_eval --mode deterministic` |
 
 ## 注意事项
 

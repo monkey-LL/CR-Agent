@@ -1,0 +1,24 @@
+id: G-015
+category: maintainability
+language: python
+pr_info:
+  title: "Add model builder"
+  author: "dev15"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-builder"
+diff: |
+  --- a/models/builder.py
+  +++ b/models/builder.py
+  @@ -1,1 +1,5 @@
+   import json
+  +
+  +def build_items(items=[]):
+  +    result = []
+  +    return result + items
+golden_findings:
+  - { rule_id: maintainability.mutable-default, severity: major, file: models/builder.py, line: 3 }
+golden_verdict: request_changes
+injection: false
+tags: [mutable-default, major]
+notes: 验证 def foo(items=[]) 可变默认参数命中 major，verdict=request_changes

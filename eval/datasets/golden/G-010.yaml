@@ -1,0 +1,28 @@
+id: G-010
+category: security
+language: python
+pr_info:
+  title: "Add hash utility"
+  author: "dev10"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-hash-util"
+diff: |
+  --- a/crypto/hash_util.py
+  +++ b/crypto/hash_util.py
+  @@ -1,1 +1,8 @@
+   import hashlib
+  +import requests
+  +
+  +def hash_password(password):
+  +    return hashlib.md5(password.encode()).hexdigest()
+  +
+  +def fetch_secure(url):
+  +    return requests.get(url, verify=False)
+golden_findings:
+  - { rule_id: security.weak-hash, severity: major, file: crypto/hash_util.py, line: 5 }
+  - { rule_id: security.verify-false, severity: major, file: crypto/hash_util.py, line: 8 }
+golden_verdict: request_changes
+injection: false
+tags: [weak-hash, verify-false, major]
+notes: 验证 hashlib.md5() 和 verify=False 两条 major 命中，verdict=request_changes

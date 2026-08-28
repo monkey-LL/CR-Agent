@@ -105,3 +105,37 @@ class TestMemorySystem:
         assert "security.sql-injection" in ctx
         # D7: 记忆系统只统计 blocker+major，minor 级不注入 prompt 避免确认偏误
         assert "debug.print-statement" not in ctx
+
+    def test_cleanup_old_reviews(self, temp_memory, tmp_path):
+        """Test that cleanup_old_reviews removes records older than retention period."""
+        import json as _json
+        from datetime import datetime, timedelta
+
+        # Insert a recent record
+        temp_memory.save_review_memory("owner/repo", 1, [
+            {"rule_id": "security.sql-injection", "severity": "blocker"}
+        ], "block")
+
+        # Insert an old record (120 days ago) directly into SQLite
+        old_date = (datetime.now() - timedelta(days=120)).isoformat()
+        db_path = tmp_path / "memory" / "memory.db"
+        conn = temp_memory.sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO reviews (repo, pr_number, verdict, findings_count, "
+            "finding_types, severities, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("owner/repo", 2, "approve", 0, _json.dumps([]), _json.dumps([]), old_date),
+        )
+        conn.commit()
+        conn.close()
+
+        # Verify 2 records exist before cleanup
+        ctx_before = temp_memory.build_memory_context("owner/repo")
+        assert "2 past reviews" in ctx_before
+
+        # Cleanup with 90-day retention (default)
+        deleted = temp_memory.cleanup_old_reviews(retention_days=90)
+        assert deleted == 1
+
+        # Verify only 1 record remains
+        ctx_after = temp_memory.build_memory_context("owner/repo")
+        assert "1 past review" in ctx_after

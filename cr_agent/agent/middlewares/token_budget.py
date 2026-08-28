@@ -29,7 +29,19 @@ from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
-_CHARS_PER_TOKEN = 4  # 回退估算值
+_CHARS_PER_TOKEN = 4  # 英文回退估算
+
+
+def _estimate_tokens(text: str) -> int:
+    """混合中英文文本的 token 估算。
+
+    英文约 4 字符/token，中文约 1.5 字符/token。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff' or '\u3000' <= c <= '\u30ff')
+    non_cjk = len(text) - cjk
+    return int(cjk / 1.5 + non_cjk / 4)
 
 
 class TokenBudgetMiddleware(Middleware):
@@ -67,12 +79,13 @@ class TokenBudgetMiddleware(Middleware):
                 total += 4
             return total
         else:
-            total_chars = sum(
-                len(getattr(msg, "content", ""))
-                for msg in messages
-                if isinstance(getattr(msg, "content", ""), str)
-            )
-            return total_chars // _CHARS_PER_TOKEN
+            total = 0
+            for msg in messages:
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    total += _estimate_tokens(content)
+                total += 4  # role 开销
+            return total
 
     def after_model(self, state: dict, response, ctx: MiddlewareContext):
         # 精确计算 token 数

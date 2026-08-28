@@ -1,0 +1,24 @@
+id: G-011
+category: security
+language: python
+pr_info:
+  title: "Add token generator"
+  author: "dev11"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-token-gen"
+diff: |
+  --- a/auth/token_gen.py
+  +++ b/auth/token_gen.py
+  @@ -1,1 +1,5 @@
+   import random
+  +import string
+  +
+  +def generate_token():
+  +    return ''.join(str(random.randint(0, 9)) for _ in range(16))
+golden_findings:
+  - { rule_id: security.insecure-random, severity: major, file: auth/token_gen.py, line: 5 }
+golden_verdict: request_changes
+injection: false
+tags: [insecure-random, major]
+notes: 验证 random.randint() 用于 token 生成命中 major，verdict=request_changes

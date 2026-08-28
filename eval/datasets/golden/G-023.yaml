@@ -1,0 +1,33 @@
+id: G-023
+category: style
+language: python
+pr_info:
+  title: "Cleanup utilities"
+  author: "dev23"
+  repo: "owner/repo"
+  base: "main"
+  head: "cleanup-utils"
+diff: |
+  --- a/utils/helpers.py
+  +++ b/utils/helpers.py
+  @@ -1,10 +1,14 @@
+   import os
+  -import sys
+  +import sys
+  +
+  +# TODO: remove this after migration
+  +def legacy_parse(data: Any) -> Any:
+  +    pass
+   def process(items):
+       result = []
+  -    for x in items:
+  +    for x in items:
+           result.append(x)
+       return result
+golden_findings:
+  - { rule_id: maintainability.todo-comment, severity: info, file: utils/helpers.py, line: 4 }
+  - { rule_id: type-safety.any-annotation, severity: info, file: utils/helpers.py, line: 5 }
+golden_verdict: approve
+injection: false
+tags: [todo, type-ignore, info, approve, python]
+notes: 验证 info 级别 finding 不影响 verdict（approve），且多行 diff 不影响检测

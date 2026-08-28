@@ -33,7 +33,20 @@ from cr_agent.agent.middlewares.base import Middleware, MiddlewareContext
 
 logger = logging.getLogger(__name__)
 
-_CHARS_PER_TOKEN = 4
+_CHARS_PER_TOKEN = 4  # 英文回退估算
+
+
+def _estimate_tokens(text: str) -> int:
+    """混合中英文文本的 token 估算。
+
+    英文约 4 字符/token，中文约 1.5 字符/token。
+    按字符的 Unicode 范围区分，比纯除 4 更准确。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff' or '\u3000' <= c <= '\u30ff')
+    non_cjk = len(text) - cjk
+    return int(cjk / 1.5 + non_cjk / 4)
 
 
 class ContextCompressionMiddleware(Middleware):
@@ -73,12 +86,13 @@ class ContextCompressionMiddleware(Middleware):
                 total += 4  # role 开销
             return total
         else:
-            total_chars = sum(
-                len(getattr(msg, "content", ""))
-                for msg in messages
-                if isinstance(getattr(msg, "content", ""), str)
-            )
-            return total_chars // _CHARS_PER_TOKEN
+            total = 0
+            for msg in messages:
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    total += _estimate_tokens(content)
+                total += 4  # role 开销
+            return total
 
     def _contains_findings(self, msg) -> bool:
         """检查 AIMessage 的 content 是否包含 LLM 审查结果 JSON。"""
@@ -151,8 +165,9 @@ class ContextCompressionMiddleware(Middleware):
                         except (json.JSONDecodeError, AttributeError):
                             pass
                     else:
-                        # 普通分析文本，取前 150 字符
-                        llm_analysis.append(content[:150])
+                        # 普通分析/推理文本，取前 300 字符保留推理过程
+                        # 300 比 150 更能保留完整推理链（如"这个函数可能有竞态因为..."）
+                        llm_analysis.append(content[:300])
 
         parts = []
         if files_read:
@@ -163,7 +178,7 @@ class ContextCompressionMiddleware(Middleware):
         if lint_results:
             parts.append(f"Lint results: {' | '.join(lint_results[:5])}")
         if llm_analysis:
-            parts.append(f"LLM analysis: {' | '.join(llm_analysis[:3])}")
+            parts.append(f"LLM reasoning: {' | '.join(llm_analysis[:3])}")
         if errors:
             parts.append(f"Errors: {len(errors)} encountered")
 
@@ -211,26 +226,57 @@ class ContextCompressionMiddleware(Middleware):
             return None
 
         # 分类消息：受保护的 / 含 findings 的 / 可压缩的
+        # 以"带 tool_calls 的 AIMessage + 其后续 ToolMessage"为最小不可分单元，
+        # 防止压缩后出现孤立的 tool_call 或孤立的 ToolMessage（会导致 API 400）。
         protected: list = []
         compressible: list = []
         first_user_protected = False
 
-        for msg in messages:
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+
             if isinstance(msg, SystemMessage):
                 protected.append(msg)
+                i += 1
             elif isinstance(msg, HumanMessage) and not first_user_protected:
-                # 第一条用户消息 = 包含 diff 的审查请求 —— 保护它
                 protected.append(msg)
                 first_user_protected = True
+                i += 1
             elif isinstance(msg, AIMessage) and self._contains_findings(msg):
-                # C3: 含 LLM findings 的消息不可压缩
                 protected.append(msg)
+                i += 1
+            elif isinstance(msg, AIMessage) and msg.tool_calls:
+                # 带工具调用的 AIMessage：收集它和后续对应的 ToolMessage 作为一个单元
+                unit = [msg]
+                j = i + 1
+                while j < len(messages) and isinstance(messages[j], ToolMessage):
+                    unit.append(messages[j])
+                    j += 1
+                compressible.extend(unit)
+                i = j
+            elif isinstance(msg, ToolMessage):
+                # 孤立的 ToolMessage（不应该出现，但防御性处理）—— 与前一消息同区
+                compressible.append(msg)
+                i += 1
             else:
                 compressible.append(msg)
+                i += 1
 
         # 保留最近的消息，压缩其余消息
-        recent = compressible[-self.keep_recent:] if len(compressible) > self.keep_recent else compressible
-        old = compressible[:-self.keep_recent] if len(compressible) > self.keep_recent else []
+        # 以"AIMessage(tool_calls) + 其 ToolMessage"为单元切分，避免截断配对
+        recent: list = []
+        old: list = []
+        if len(compressible) > self.keep_recent:
+            # 从末尾向前收集 keep_recent 条，但不截断在 tool_call/ToolMessage 中间
+            cut_point = len(compressible) - self.keep_recent
+            # 如果 cut_point 落在 ToolMessage 上，向后推到包含该配对的 AIMessage 之前
+            while cut_point < len(compressible) and isinstance(compressible[cut_point], ToolMessage):
+                cut_point += 1
+            old = compressible[:cut_point]
+            recent = compressible[cut_point:]
+        else:
+            recent = compressible
 
         if not old:
             return None

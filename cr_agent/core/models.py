@@ -119,11 +119,22 @@ def determine_verdict(findings: list[Finding]) -> Verdict:
     """根据发现列表判定审查结论。
 
     学习重点：这是将发现映射到行动的决策逻辑。
+
+    verdict 由代码根据 findings 的严重度自动判定，不由 LLM 输出。
+    确定性来源（source="deterministic"）的 finding 可信度高，1 条即触发。
+    LLM 来源（source="llm"）的 finding 可能存在假阳性，blocker/major 需 ≥2 条才触发。
     """
-    has_blocker = any(f.severity == Severity.BLOCKER for f in findings)
-    has_major = any(f.severity == Severity.MAJOR for f in findings)
-    if has_blocker:
+    det_blockers = [f for f in findings if f.severity == Severity.BLOCKER and f.source == "deterministic"]
+    llm_blockers = [f for f in findings if f.severity == Severity.BLOCKER and f.source == "llm"]
+    det_majors = [f for f in findings if f.severity == Severity.MAJOR and f.source == "deterministic"]
+    llm_majors = [f for f in findings if f.severity == Severity.MAJOR and f.source == "llm"]
+
+    if det_blockers:
         return Verdict.BLOCK
-    if has_major:
+    if len(llm_blockers) >= 2:
+        return Verdict.BLOCK
+    if det_majors:
+        return Verdict.REQUEST_CHANGES
+    if len(llm_majors) >= 2:
         return Verdict.REQUEST_CHANGES
     return Verdict.APPROVE

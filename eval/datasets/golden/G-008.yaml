@@ -1,0 +1,25 @@
+id: G-008
+category: security
+language: python
+pr_info:
+  title: "Add config loader"
+  author: "dev8"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-config-loader"
+diff: |
+  --- a/config/loader.py
+  +++ b/config/loader.py
+  @@ -1,1 +1,6 @@
+   import yaml
+  +
+  +def load_config(data):
+  +    return yaml.load(data)
+  +
+  +CONFIG = load_config(open("config.yaml").read())
+golden_findings:
+  - { rule_id: security.yaml-unsafe-load, severity: blocker, file: config/loader.py, line: 4 }
+golden_verdict: block
+injection: false
+tags: [yaml-unsafe-load, blocker]
+notes: 验证 yaml.load() 不带 SafeLoader 命中 blocker

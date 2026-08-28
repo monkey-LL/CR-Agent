@@ -1,0 +1,26 @@
+id: G-016
+category: error-handling
+language: python
+pr_info:
+  title: "Add safe call wrapper"
+  author: "dev16"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-safe-call"
+diff: |
+  --- a/utils/safe_call.py
+  +++ b/utils/safe_call.py
+  @@ -1,1 +1,6 @@
+   import logging
+  +
+  +def safe_call(fn):
+  +    try:
+  +        return fn()
+  +    except Exception: pass
+golden_findings:
+  - { rule_id: error-handling.pass-in-except, severity: minor, file: utils/safe_call.py, line: 6 }
+  - { rule_id: error-handling.broad-except, severity: minor, file: utils/safe_call.py, line: 6 }
+golden_verdict: approve
+injection: false
+tags: [pass-in-except, broad-except, minor]
+notes: "验证 except Exception: pass 同行写法命中 pass-in-except(minor) 和 broad-except(minor)，verdict=approve"

@@ -1,0 +1,25 @@
+id: G-003
+category: style
+language: python
+pr_info:
+  title: "Refactor imports"
+  author: "dev3"
+  repo: "owner/repo"
+  base: "main"
+  head: "refactor-imports"
+diff: |
+  --- a/app/main.py
+  +++ b/app/main.py
+  @@ -1,5 +1,8 @@
+   import os
+  +from os import *
+  +import sys
+  +
+  +def main():
+  +    pass
+golden_findings:
+  - { rule_id: quality.import-star, severity: minor, file: app/main.py, line: 2 }
+golden_verdict: approve
+injection: false
+tags: [import-star, minor, approve]
+notes: 验证仅 minor 级别 finding 时 verdict=approve

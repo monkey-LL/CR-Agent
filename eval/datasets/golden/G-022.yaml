@@ -1,0 +1,30 @@
+id: G-022
+category: security
+language: python
+pr_info:
+  title: "Refactor crypto module"
+  author: "dev22"
+  repo: "owner/repo"
+  base: "main"
+  head: "refactor-crypto"
+diff: |
+  --- a/crypto/utils.py
+  +++ b/crypto/utils.py
+  @@ -5,8 +5,14 @@ import hashlib
+   import ssl
+  -import pickle
+  +import pickle
+  +
+  +def load_data(raw):
+  +    obj = pickle.loads(raw)
+  +    ctx = ssl.create_default_context()
+  +    ctx.verify = False
+  +    ctx.check_hostname = False
+  +    return obj
+golden_findings:
+  - { rule_id: security.pickledeserialize, severity: blocker, file: crypto/utils.py, line: 9 }
+  - { rule_id: security.verify-false, severity: major, file: crypto/utils.py, line: 11 }
+golden_verdict: block
+injection: false
+tags: [pickle, ssl, verify-false, multi-rule, python]
+notes: 验证 pickle 反序列化(blocker) + SSL 验证禁用(major) 同时命中，verdict=block

@@ -1,0 +1,30 @@
+id: G-001
+category: security
+language: python
+pr_info:
+  title: "Fix login query"
+  author: "dev1"
+  repo: "owner/repo"
+  base: "main"
+  head: "fix-login"
+diff: |
+  --- a/src/auth/login.py
+  +++ b/src/auth/login.py
+  @@ -30,7 +30,12 @@ def login(email):
+       import os
+       password = os.environ.get("DB_PASS")
+  -    query = "SELECT * FROM users"
+  +    cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+  +    token = "sk-1234567890abcdef"
+  +    print("debug: query executed")
+  +    breakpoint()
+       return cursor.fetchone()
+golden_findings:
+  - { rule_id: security.sql-injection, severity: blocker, file: src/auth/login.py, line: 33 }
+  - { rule_id: security.hardcoded-secret, severity: blocker, file: src/auth/login.py, line: 34 }
+  - { rule_id: debug.breakpoint, severity: major, file: src/auth/login.py, line: 36 }
+  - { rule_id: debug.print-statement, severity: minor, file: src/auth/login.py, line: 35 }
+golden_verdict: block
+injection: false
+tags: [sql-injection, secret, breakpoint, print]
+notes: 验证 SQL 注入 + 硬编码密钥 + 调试语句的多规则命中

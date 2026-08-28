@@ -7,7 +7,7 @@
 打开终端，输入两条命令：
 
 ```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 ./start.sh web
 ```
 
@@ -60,8 +60,7 @@ http://localhost:8088
 
 ```bash
 # 换个端口启动（比如 9090）
-/Users/monkeyll/Downloads/deer-flow/backend/.venv/bin/python \
-  -m uvicorn cr_agent.web.server:app --port 9090
+python -m uvicorn cr_agent.web.server:app --port 9090
 ```
 
 然后浏览器访问 `http://localhost:9090`。
@@ -214,7 +213,7 @@ LLM 会额外发现正则抓不到的问题，比如：
 ### 4.1 确定性检查（免费，秒出）
 
 ```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 
 # 审查一个 diff 文件
 ./start.sh cli --diff-file /tmp/my_changes.patch --no-llm
@@ -259,7 +258,7 @@ gh auth login
 ### 5.2 启动 webhook 服务
 
 ```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 ./start.sh webhook
 ```
 
@@ -299,11 +298,11 @@ export GITHUB_WEBHOOK_SECRET="my-secret-123"
 ## 六、运行测试
 
 ```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 ./start.sh test
 ```
 
-会运行 31 个测试，覆盖 diff 解析、规则引擎、安全防护、熔断器、重试等。
+会运行 316 个测试，覆盖 diff 解析、规则引擎、安全防护、熔断器、重试、幂等性、沙箱、评测等。
 
 ---
 

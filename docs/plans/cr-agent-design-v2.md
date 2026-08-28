@@ -489,7 +489,7 @@ CR_MEMORY_DIR=.cr_agent_memory
 ### 11.2 启动命令
 
 ```bash
-cd /Users/monkeyll/CRagent
+cd CRagent
 
 ./start.sh web       # Web UI (port 8088)
 ./start.sh webhook   # Webhook 服务 (port 8088)

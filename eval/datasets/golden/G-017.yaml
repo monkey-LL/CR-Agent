@@ -1,0 +1,25 @@
+id: G-017
+category: error-handling
+language: python
+pr_info:
+  title: "Add data service"
+  author: "dev17"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-data-service"
+diff: |
+  --- a/services/data.py
+  +++ b/services/data.py
+  @@ -3,2 +3,5 @@
+   def fetch_data(query):
+  -    return db.query(query)
+  +    try:
+  +        return db.query(query)
+  +    except Exception:
+  +        return None
+golden_findings:
+  - { rule_id: error-handling.broad-except, severity: minor, file: services/data.py, line: 6 }
+golden_verdict: approve
+injection: false
+tags: [broad-except, minor]
+notes: "验证 except Exception: (非 pass) 命中 broad-except(minor)，verdict=approve"

@@ -1,0 +1,25 @@
+id: G-007
+category: security
+language: python
+pr_info:
+  title: "Add dynamic exec runner"
+  author: "dev7"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-exec-runner"
+diff: |
+  --- a/src/dynamic/exec_runner.py
+  +++ b/src/dynamic/exec_runner.py
+  @@ -1,1 +1,6 @@
+   import json
+  +import os
+  +
+  +def run_dynamic(code_string):
+  +    exec(code_string)
+  +    return os.getcwd()
+golden_findings:
+  - { rule_id: security.exec-usage, severity: blocker, file: src/dynamic/exec_runner.py, line: 5 }
+golden_verdict: block
+injection: false
+tags: [exec-usage, blocker]
+notes: 验证 exec(code_string) 命中 blocker

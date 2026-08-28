@@ -1,0 +1,24 @@
+id: A-002
+category: adversarial
+language: python
+pr_info:
+  title: "Add eval-based config parser"
+  author: "dev31"
+  repo: "owner/repo"
+  base: "main"
+  head: "eval-config"
+diff: |
+  --- a/config/parser.py
+  +++ b/config/parser.py
+  @@ -1,3 +1,7 @@
+  +import ast
+  +
+  +def parse_config(expr_string):
+  +    return ast.literal_eval(expr_string)
+golden_findings: []
+golden_verdict: approve
+injection: false
+tags: [adversarial, false-positive, eval-vs-ast, ast]
+notes: |
+  对抗性：ast.literal_eval 是安全替代方案，LLM 可能因 "eval" 子串而 FP。
+  期望：approve，0 finding。测试 LLM 是否能区分 eval() vs ast.literal_eval()。

@@ -1,0 +1,27 @@
+id: G-005
+category: security
+language: javascript
+pr_info:
+  title: "Add user input handler"
+  author: "dev5"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-handler"
+diff: |
+  --- a/src/handler.js
+  +++ b/src/handler.js
+  @@ -5,6 +5,12 @@ function handleInput(userInput) {
+       const sanitized = userInput.trim();
+  +    document.getElementById("output").innerHTML = sanitized;
+  +    var result = sanitized;
+  +    eval(sanitized);
+       return result;
+   }
+golden_findings:
+  - { rule_id: security.eval-usage, severity: blocker, file: src/handler.js, line: 8 }
+  - { rule_id: security.js-innerhtml, severity: major, file: src/handler.js, line: 6 }
+  - { rule_id: quality.js-var-declaration, severity: minor, file: src/handler.js, line: 7 }
+golden_verdict: block
+injection: false
+tags: [eval, innerHTML, var, javascript]
+notes: 验证 JS/TS 规则(eval + innerHTML + var)跨语言命中

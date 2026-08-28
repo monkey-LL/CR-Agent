@@ -1,0 +1,27 @@
+id: G-002
+category: security
+language: python
+pr_info:
+  title: "Add eval helper"
+  author: "dev2"
+  repo: "owner/repo"
+  base: "main"
+  head: "add-eval"
+diff: |
+  --- a/utils/eval_helper.py
+  +++ b/utils/eval_helper.py
+  @@ -1,3 +1,8 @@
+   import json
+  +import pickle
+  +
+  +def load_model(data):
+  +    return pickle.loads(data)
+  +
+  +result = eval(input("Enter expression: "))
+golden_findings:
+  - { rule_id: security.eval-usage, severity: blocker, file: utils/eval_helper.py, line: 7 }
+  - { rule_id: security.pickledeserialize, severity: blocker, file: utils/eval_helper.py, line: 5 }
+golden_verdict: block
+injection: false
+tags: [eval, pickle, blocker]
+notes: 验证 eval 和 pickle 两条 blocker 规则同时命中
