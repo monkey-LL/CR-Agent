@@ -295,6 +295,32 @@ export GITHUB_WEBHOOK_SECRET="my-secret-123"
 
 ---
 
+## 五点五、生产环境安全配置
+
+### Web UI API Key 认证
+
+默认情况下 Web UI 不需要认证，适合本地开发。如果部署到公网或共享网络，建议启用 API Key 认证：
+
+```bash
+export CR_WEB_API_KEY="your-secret-api-key"
+./start.sh web
+```
+
+启用后：
+- `/api/review` 请求需要携带 `X-API-Key: your-secret-api-key` 请求头
+- 使用 `hmac.compare_digest` 做常数时间比较，防止时序攻击
+- 未设置 `CR_WEB_API_KEY` 时自动跳过认证（并输出警告日志）
+
+### Webhook 去重线程安全
+
+Webhook delivery 去重使用 `threading.Lock` 保护 `OrderedDict` 操作，防止并发请求导致 `move_to_end` + `popitem` 竞态。
+
+### 后台任务异常兜底
+
+`_run_review` 后台任务包含 `except BaseException` 兜底，确保 `KeyboardInterrupt`、`SystemExit` 等异常也会释放幂等性锁，防止 PR 被永久阻塞。
+
+---
+
 ## 六、运行测试
 
 ```bash
@@ -332,3 +358,7 @@ LLM 模式已经配好了 DeepSeek-V4-Flash 模型和 API Key。如果报错，�
 ### Q: 支持哪些代码托管平台？
 
 Webhook 模式目前只支持 GitHub。Web UI 和 CLI 模式不依赖任何平台——你手动粘贴 diff 就行。
+
+### Q: Web UI 部署到公网安全吗？
+
+默认不安全——`/api/review` 端点无认证，任何人都可以触发 LLM 审查消耗 API 额度。生产部署请设置 `CR_WEB_API_KEY` 环境变量，启用后请求需携带 `X-API-Key` 头认证。

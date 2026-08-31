@@ -45,6 +45,17 @@ python -m uvicorn cr_agent.web.server:app --port 8088
 3. 点「Review」按钮
 4. 右侧秒出结果：确定性 findings + verdict
 
+### 1.5 生产环境安全配置（可选）
+
+如果 Web UI 暴露在公网或非可信网络，建议设置 API Key 认证：
+
+```bash
+export CR_WEB_API_KEY="your-secret-api-key"
+./start.sh web
+```
+
+设置后，`/api/review` 端点需要通过 `X-API-Key` 请求头认证。未设置时默认不启用认证（适合本地开发）。
+
 ### 1.4 端口被占用？
 
 ```bash
@@ -198,4 +209,5 @@ python -m eval.run_eval --mode llm \
 3. **LLM 模式**需要设置 `OPENAI_API_KEY`，支持 OpenAI / DeepSeek / 任何兼容 API
 4. **GitHub PR 模式**需要 `gh` CLI 已安装并认证
 5. **Webhook 模式**需要设置 `GITHUB_WEBHOOK_SECRET` 和 GitHub App
-6. 端口被占用时，`--port` 换成任意空闲端口
+6. **Web UI 生产部署**建议设置 `CR_WEB_API_KEY` 防止未授权 LLM 调用
+7. 端口被占用时，`--port` 换成任意空闲端口

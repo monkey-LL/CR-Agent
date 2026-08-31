@@ -14,11 +14,12 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -35,6 +36,14 @@ app = FastAPI(title="CR Agent Web UI")
 
 WEB_DIR = Path(__file__).parent
 MAX_DIFF_SIZE = 500_000  # 500KB 请求体上限
+
+WEB_API_KEY = os.environ.get("CR_WEB_API_KEY", "")
+
+if not WEB_API_KEY:
+    logger.warning(
+        "CR_WEB_API_KEY not set — /api/review is unauthenticated. "
+        "Set it to restrict access in production."
+    )
 
 
 class ReviewRequest(BaseModel):
@@ -73,13 +82,29 @@ async def list_rules():
     ]
 
 
+def _verify_api_key(x_api_key: str = Header(default="")) -> bool:
+    """验证请求的 API Key。如果 CR_WEB_API_KEY 未设置则跳过认证。"""
+    if not WEB_API_KEY:
+        return True
+    return bool(x_api_key) and hmac.compare_digest(x_api_key, WEB_API_KEY)
+
+
 @app.post("/api/review")
 async def review(req: ReviewRequest, request: Request):
     """执行代码审查并返回报告。
 
     如果 use_llm=False（默认），仅运行确定性检查 — 快速、免费。
     如果 use_llm=True，运行完整的 LangGraph agent 进行 LLM 语义分析。
+
+    如果设置了 CR_WEB_API_KEY 环境变量，需要通过 X-API-Key header 认证。
     """
+    # API Key 认证
+    if not _verify_api_key(request.headers.get("x-api-key", "")):
+        return JSONResponse(
+            {"error": "Invalid or missing API key"},
+            status_code=401,
+        )
+
     # 请求体大小检查
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > MAX_DIFF_SIZE:

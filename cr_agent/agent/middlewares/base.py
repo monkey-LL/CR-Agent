@@ -28,11 +28,18 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# 每个执行上下文（如一次 graph.invoke）拥有独立的 MiddlewareContext，
+# 避免并发 invoke 共享同一 ctx 导致竞态。
+_ctx_var: contextvars.ContextVar[MiddlewareContext] = contextvars.ContextVar(
+    "cr_agent_middleware_ctx"
+)
 
 
 @dataclass
@@ -92,7 +99,20 @@ class MiddlewareChain:
 
     def __init__(self, middlewares: list[Middleware] | None = None):
         self.middlewares = middlewares or []
-        self.ctx = MiddlewareContext()
+
+    @property
+    def ctx(self) -> MiddlewareContext:
+        """获取当前执行上下文的 MiddlewareContext。
+
+        通过 contextvars 绑定，使每次 graph.invoke 拥有独立上下文，
+        避免并发竞态。如果尚未绑定（如测试中直接调用），返回一个新的实例。
+        """
+        try:
+            return _ctx_var.get()
+        except LookupError:
+            ctx = MiddlewareContext()
+            _ctx_var.set(ctx)
+            return ctx
 
     def add(self, middleware: Middleware) -> MiddlewareChain:
         self.middlewares.append(middleware)
@@ -151,11 +171,10 @@ class MiddlewareChain:
     def reset(self) -> None:
         """为新的一次审查调用重置链上下文。
 
-        当 middleware 链被复用时（例如生产环境中的单例模式），
-        此方法可防止不同审查之间的状态泄漏。
-        同时重置共享上下文和每个 middleware 的内部状态。
+        通过 contextvars 绑定新的 MiddlewareContext，确保并发 invoke
+        之间不会共享状态。同时重置每个 middleware 的内部状态。
         """
-        self.ctx = MiddlewareContext()
+        _ctx_var.set(MiddlewareContext())
         for mw in self.middlewares:
             if hasattr(mw, "reset"):
                 mw.reset()

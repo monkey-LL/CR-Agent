@@ -429,9 +429,8 @@ def build_graph(model_name: str = "DeepSeek-V4-Flash", temperature: float = 0.1)
     chain = build_default_chain()
 
     # 每次审查开始时重置中间件上下文，防止状态泄漏。
-    # 注意：chain 与 graph 实例绑定，每次 build_graph 创建新的 chain。
-    # 调用方应每次审查调 build_graph()，不要复用 graph 实例跨多次 invoke，
-    # 否则 MiddlewareContext 可能在并发 invoke 间产生竞态。
+    # MiddlewareContext 通过 contextvars 绑定，并发 invoke 拥有独立上下文。
+    # chain.reset() 在当前执行上下文中创建新的 MiddlewareContext。
     def prepare_with_reset(state: AgentState) -> dict:
         chain.reset()
         init_metrics()

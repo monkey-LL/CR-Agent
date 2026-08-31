@@ -43,6 +43,8 @@ cr_agent/agent/middlewares/__init__.py          # build_default_chain()
 
 中间件链是 Agent 的"管网"。每个中间件处理一个横切关注点，业务逻辑（graph.py 的节点）只管核心流程，不关心安全、压缩、预算这些事。
 
+**并发隔离**：`MiddlewareContext` 通过 `contextvars.ContextVar` 绑定到当前执行上下文，每次 `graph.invoke` 拥有独立的 ctx 实例。即使同一个 chain 被并发调用，不同审查之间不会共享或覆盖中间件状态。`MiddlewareChain.reset()` 在当前上下文中创建新的 `MiddlewareContext` 并重置各中间件内部状态。
+
 四个钩子时序：
 ```
 用户输入 → [before_model] → LLM 调用 → [after_model] → 工具调用 → [before_tool] → 执行 → [after_tool]
@@ -215,7 +217,9 @@ trace=abc123 → review.complete, verdict=block
 > "GitHub 重复发 webhook 怎么办？你的审查会不会重复执行？"
 
 **参考答案**：
-> 三层去重：1）delivery ID 去重——每个 webhook 有唯一 X-GitHub-Delivery，处理过的 ID 存入 set，重复的直接返回；2）幂等存储——(repo, pr_number) 为 key，IN_PROGRESS 状态时拒绝新的审查，DONE 状态在 TTL 300s 内也拒绝；3）并发限制——max 3 个并行审查，超限拒绝。这样即使 GitHub 重投递 3 次，也只会执行 1 次审查。
+> 三层去重：1）delivery ID 去重——每个 webhook 有唯一 X-GitHub-Delivery，处理过的 ID 存入 `OrderedDict`（LRU 淘汰，`threading.Lock` 保护并发安全），重复的直接返回；2）幂等存储——(repo, pr_number) 为 key，IN_PROGRESS 状态时拒绝新的审查，DONE 状态在 TTL 300s 内也拒绝；3）并发限制——max 3 个并行审查，超限拒绝。这样即使 GitHub 重投递 3 次，也只会执行 1 次审查。
+
+> 后台任务 `_run_review` 包含 `except BaseException` 兜底，确保 `KeyboardInterrupt`/`SystemExit` 等也会释放幂等性锁，防止 PR 被永久阻塞（IN_PROGRESS 状态泄漏）。
 
 ---
 
@@ -307,7 +311,7 @@ python -m cr_agent.core.contracts
    > 短路。该工具调用被跳过，返回一个 error ToolMessage 给 LLM。LLM 知道这个工具被拦截了，会尝试其他方案。
 
 4. 中间件的状态怎么在 hook 之间传递？
-   > MiddlewareContext 数据类。iteration、tool_call_history、total_tokens、blocked_tools 都在 ctx 里，所有中间件共享同一个 ctx 实例。
+   > MiddlewareContext 数据类。iteration、tool_call_history、total_tokens、blocked_tools 都在 ctx 里。ctx 通过 `contextvars.ContextVar` 绑定到当前执行上下文，每次 `graph.invoke` 拥有独立的 ctx 实例，并发 invoke 不会互相覆盖。`MiddlewareChain.reset()` 在当前上下文中创建新的 MiddlewareContext。
 
 **上下文管理（3 题）**
 
@@ -373,7 +377,7 @@ python -m cr_agent.core.contracts
 
 | 想复习什么 | 看哪个文件 | 关键函数/类 |
 |-----------|-----------|------------|
-| 中间件基类 | `agent/middlewares/base.py` | `Middleware`, `MiddlewareChain`, `build_default_chain()` |
+| 中间件基类 | `agent/middlewares/base.py` | `Middleware`, `MiddlewareChain`(`contextvars` 隔离), `build_default_chain()` |
 | Prompt injection 防护 | `middlewares/input_sanitization.py` | `InputSanitizationMiddleware` |
 | 上下文压缩 | `middlewares/context_compression.py` | `ContextCompressionMiddleware` |
 | 循环检测 | `middlewares/loop_detection.py` | `LoopDetectionMiddleware`, `_hash_call()` |

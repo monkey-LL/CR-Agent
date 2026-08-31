@@ -380,6 +380,7 @@ CREATE TABLE reviews (
 | CR_MODEL | 环境变量 | DeepSeek-V4-Flash | 审查模型 |
 | GITHUB_WEBHOOK_SECRET | 环境变量 | — | HMAC 密钥 |
 | GH_TOKEN | 环境变量 | — | GitHub Token(经 `extra_env` 注入子进程) |
+| CR_WEB_API_KEY | 环境变量 | — | Web UI API Key 认证(未设置则跳过认证) |
 | CR_MEMORY_DIR | 环境变量 | .cr_agent_memory | 记忆目录 |
 | CR_MEMORY_DB | 环境变量 | {CR_MEMORY_DIR}/memory.db | SQLite 路径 |
 | REDIS_URL | 环境变量 | — | 有则用 Redis 幂等后端;无则内存 |
@@ -461,8 +462,8 @@ CREATE TABLE reviews (
 | 编号 | 风险 | 类别 | 严重度 |
 |------|------|------|--------|
 | R5 | `IdempotencyStore` 用 `threading.Lock`,多 worker/多实例下幂等与并发控制**完全失效**;须强制 Redis 后端,但 Redis 版 `GET→SET NX→INCR` 三步非原子,高并发可超 `max_concurrent`,且 Redis 故障 fail-open(保护失效) | 可靠性 | 高 |
-| R6 | delivery 去重 `_processed_deliveries` 为纯内存 set:进程重启丢失、多实例不共享、超 1000 全量清空 → 重放攻击(仅 TTL 300s 部分缓解) | 安全/可靠 | 高 |
-| R7 | 后台任务 `_run_review` `except Exception` 吞没所有异常,无重试/告警/DLQ;`get_pr_diff`/`get_pr_info`/`post_pr_comment` 均**不检查 gh CLI returncode**,`get_pr_info` 失败会抛 `JSONDecodeError` | 可靠性 | 高 |
+| R6 | ~~delivery 去重 `_processed_deliveries` 为纯内存 set:进程重启丢失、多实例不共享、超 1000 全量清空 → 重放攻击(仅 TTL 300s 部分缓解)~~ **已优化:改用 `OrderedDict` LRU 淘汰 + `threading.Lock` 保护并发安全;多实例/重启丢失仍需 Redis 后端** | 安全/可靠 | ~~高~~ 中(并发安全已修复) |
+| R7 | ~~后台任务 `_run_review` `except Exception` 吞没所有异常,无重试/告警/DLQ;`get_pr_diff`/`get_pr_info`/`post_pr_comment` 均**不检查 gh CLI returncode**,`get_pr_info` 失败会抛 `JSONDecodeError`~~ **已修复:新增 `except BaseException` 兜底,确保幂等性锁总被释放,然后 `raise` 传播** | 可靠性 | ~~高~~ 已修复 |
 
 ### 6.4 技术风险(安全)
 

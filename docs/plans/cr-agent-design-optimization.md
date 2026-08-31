@@ -116,15 +116,17 @@
 
 `MiddlewareContext` 用普通 Python 对象（无锁），`BackgroundTasks` 在同进程内可能并发执行多个 `_run_review`。如果同一个 chain 实例被多个 invoke 共享，`chain.reset()` 可能清掉另一个正在跑的审查的上下文。
 
-### 优化方案
+### 优化方案（已实现）
 
-- 当前代码已经是每次 `build_graph()` 新建 chain，webhook 和 Web API 每次审查都调 `build_graph()`
-- 加注释明确约束："调用方应每次审查调 build_graph()，不要复用 graph 实例跨多次 invoke"
-- 不改代码结构，只加文档约束（实际场景已被规避）
+- `MiddlewareContext` 改为通过 `contextvars.ContextVar` 绑定，每次 `graph.invoke` 在自己的执行上下文中拥有独立的 `MiddlewareContext` 实例
+- `MiddlewareChain.ctx` 改为 `@property`，通过 `_ctx_var.get()` 获取当前上下文，首次访问自动创建
+- `MiddlewareChain.reset()` 通过 `_ctx_var.set()` 绑定新实例
+- 并发 invoke 不再共享或覆盖中间件状态
 
 ### 改动文件
 
-- `cr_agent/agent/graph.py` — `build_graph` 内加注释
+- `cr_agent/agent/middlewares/base.py` — `MiddlewareChain` 改用 `contextvars`
+- `cr_agent/agent/graph.py` — 更新注释
 
 ---
 
